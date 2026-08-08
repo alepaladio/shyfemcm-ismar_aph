@@ -233,7 +233,7 @@ OBJ = \
       wetdry.o stability.o time_admin.o \
       model3d_util.o trace.o keps_util.o kepsilon.o eq_state.o \
       offline_data.o rd_ts.o intp_tst.o \
-      arrays.o closing.o diffusion_admin.o bcvel.o \
+      arrays.o closing.o complete_closure.o diffusion_admin.o bcvel.o \
       floodfill.o topological_admin.o coo_matrix.o nudge.o \
       turbine.o initialize.o \
       bnd_routines.o concentration_omp.o \
@@ -398,6 +398,7 @@ cleanlinks:
 ../../lib/mod/check_unit.mod: check.o
 ../../lib/mod/chezy.mod: chezy.o
 ../../lib/mod/close.mod: closing.o
+../../lib/mod/coclose.mod: complete_closure.o
 ../../lib/mod/connectivity.mod: lagrange_connect.o
 ../../lib/mod/conz_debug.mod: concentration_omp.o
 ../../lib/mod/extra.mod: extra.o
@@ -534,6 +535,10 @@ closing.o: ../../lib/mod/arrays.mod ../../lib/mod/basin.mod \
 		../../lib/mod/mod_info_output.mod \
 		../../lib/mod/mod_internal.mod \
 		../../lib/mod/shympi.mod 
+complete_closure.o: ../../lib/mod/arrays.mod ../../lib/mod/basin.mod \
+		../../lib/mod/levels.mod \
+		../../lib/mod/mod_layer_thickness.mod \
+		../../lib/mod/shympi.mod
 concentration.o: ../../lib/mod/basin.mod ../../lib/mod/evgeom.mod \
 		../../lib/mod/levels.mod ../../lib/mod/mkonst.mod \
 		../../lib/mod/mod_area.mod \
@@ -695,6 +700,7 @@ hydrodynamic.o: ../../lib/mod/basin.mod ../../lib/mod/evgeom.mod \
 		../../lib/mod/mod_area.mod \
 		../../lib/mod/mod_bound_dynamic.mod \
 		../../lib/mod/mod_bound_geom.mod \
+		../../lib/mod/coclose.mod \
 		../../lib/mod/mod_depth.mod \
 		../../lib/mod/mod_diff_visc_fric.mod \
 		../../lib/mod/mod_fluidmud.mod \

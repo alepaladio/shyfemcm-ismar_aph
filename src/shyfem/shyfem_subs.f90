@@ -506,6 +506,7 @@
         call set_diffusivity
 	call tidefini
 	call do_close_init
+	call coclose_init
         call shdist(rdistv)
 	call quad_tree_initialize
 	call tracer_init

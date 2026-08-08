@@ -1757,6 +1757,7 @@
 !c undocumented parameters
 
 	call addpar('iclose',0.)
+	call addpar('icoclo',0.)
 	call addpar('itsmed',0.)	!averages for T/S
 
 !c internally used parameters

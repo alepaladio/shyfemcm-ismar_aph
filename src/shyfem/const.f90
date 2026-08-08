@@ -191,6 +191,7 @@
 	call ckbnds	!boundary conditions
 
 	call ckclos
+	call ckcoclos
 !	call ckoxy	!oxygen
 
 	ibarcl=nint(getpar('ibarcl'))

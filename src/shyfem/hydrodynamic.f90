@@ -357,6 +357,7 @@
 
 	iw=0
 	call do_close_handle(iw)
+	call coclose_handle(iw)
 
 	vqv = rqv
 	where( inodv == -2 ) vqv = 0.	!set to zero for dry nodes
@@ -910,6 +911,7 @@
 	use basin
 	use pkonst
 	use mkonst
+	use coclose, only : icoclose, rclosurev
 	!use ieee_exceptions
 
 	implicit none
@@ -960,6 +962,7 @@
 	real ss
 	logical b2d
 	logical, parameter :: debug_mpi = .false.
+	real rbarrier,rbarrier_fric
 
 	double precision b(3),c(3)
 	double precision bpres,cpres,presx,presy
@@ -1205,6 +1208,21 @@
 	  if( rcomp /= 1. ) rfric = rfric_max * (1.-rcomp) + rfric * rcomp
 	  aa  = aa + dt * rfric
 	  aat = aat + rfric
+	end if
+
+	aa  = aa + dt * ifricv(l,ie)		!internal friction for turbines
+	aat = aat + ifricv(l,ie)
+
+!       -----------------------------------------------------
+!       complete closure function
+!       -----------------------------------------------------
+
+	if( icoclose > 0 ) then
+	  rbarrier = rclosurev(l,ie)
+	  rbarrier = max(0.,min(1.,rbarrier))
+	  rbarrier_fric = rfric_max * (1. - rbarrier)
+	  aa  = aa  + dt * rbarrier_fric
+	  aat = aat + rbarrier_fric
 	end if
 
 	aa  = aa + dt * ifricv(l,ie)		!internal friction for turbines

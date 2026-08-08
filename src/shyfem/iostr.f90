@@ -253,6 +253,8 @@
 
 	call prclos		!prints closing sections
 
+	call prcoclos		!prints complete closure sections
+
 !	call proxy		!prints oxygen section
 
 !	call prlgr		!prints float coordinates
@@ -311,6 +313,8 @@
 	call tsbnds
 
 	call tsclos
+
+	call tscoclos
 
 !	call tsoxy	!oxygen
 
@@ -429,6 +433,8 @@
 			call section_deleted(section,'use section $lagrg')
 		else if(section.eq.'close') then
 			call rdclos(num)
+		else if(section.eq.'coclo') then
+			call rdcoclos(num)
 		else if(section.eq.'flux') then
 			call rdflxa
 		!else if(section.eq.'vol') then
