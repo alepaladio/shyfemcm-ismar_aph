@@ -162,6 +162,10 @@
 ! 03.12.2024    ggu     new info_output framework
 ! 05.02.2025    ggu     new info_format for T/S
 ! 24.04.2025    ggu     new value for ibarcl: ibercl == 5
+! 11.11.2025    ggu     general assimilation of T/S
+! 28.01.2026    ggu     new routine ts_nudge_check()
+! 30.01.2026    ggu     fixed bug in nudging (with tau given as parameter)
+! 05.05.2026    ggu     some more info messages
 !
 ! notes :
 !
@@ -346,11 +350,6 @@
 		  end if
 		end if
 
-		if( bobs ) then
-	  	  call ts_nudge(dtime0,nlvdi,nlv,nkn,tobsv,sobsv &
-     &						,ttauv,stauv)
-		end if
-
 !		--------------------------------------------
 !		initialize observations and relaxation times
 !		--------------------------------------------
@@ -359,6 +358,14 @@
 		sobsv = 0.
 		ttauv = 0.
 		stauv = 0.
+
+		if( bobs ) then
+	  	  call ts_nudge(dtime0,nlvdi,nlv,nkn,tobsv,sobsv &
+     &						,ttauv,stauv)
+		end if
+
+	        call ts_nudge_check(dtime0,nlvdi,nlv,nkn &
+     &				,tobsv,sobsv,ttauv,stauv)
 
 !		--------------------------------------------
 !		initialize open boundary conditions
@@ -376,9 +383,15 @@
                 nvar = 1
                 cdef(1) = 0.
 		what = 'temp'
+		if( print_not_quiet_once() ) then
+		  write(6,*) 'opening boundary file for ',trim(what)
+		end if
 		call bnds_init_new(what,dtime0,nintp,nvar,nkn,nlv &
      &					,cdef,idtemp)
 		what = 'salt'
+		if( print_not_quiet_once() ) then
+		  write(6,*) 'opening boundary file for ',trim(what)
+		end if
 		call bnds_init_new(what,dtime0,nintp,nvar,nkn,nlv &
      &					,cdef,idsalt)
 
@@ -441,6 +454,7 @@
 	  call ts_diag(dtime,nlvdi,nlv,nkn,tempv,saltv)
 	else if( bobs ) then
 	  call ts_nudge(dtime,nlvdi,nlv,nkn,tobsv,sobsv,ttauv,stauv)
+	  !call ts_nudge_check(dtime,nlvdi,nlv,nkn,tobsv,sobsv,ttauv,stauv)
 	end if
 
 !----------------------------------------------------------
@@ -500,6 +514,8 @@
 !$OMP TASKWAIT
 
 	  !call ts_dia('after T/D')
+	  !call scalar_nudging_handle(saltv)
+	  call assimil_ts(tempv,saltv)
 
 	end if
 
@@ -546,6 +562,7 @@
 !----------------------------------------------------------
 
 	call compute_heat_flux
+	call output_meteo_and_heat_flux_data
 
 !----------------------------------------------------------
 ! compute rhov
@@ -935,22 +952,32 @@
 
 	character*80 tempf,saltf,ttauf,stauf
 	character*80 string
-	real ttaup,staup
+	real tau_limit
 	logical, save :: btnudge,bsnudge
 	integer, save :: idtemp,idsalt
 	integer, save :: idttau,idstau
+	real, save :: ttaup,staup
 	integer, save :: icall = 0
 
 	real getpar
 
-	call getfnm('tempobs',tempf)
-	call getfnm('saltobs',saltf)
-	call getfnm('temptau',ttauf)
-	call getfnm('salttau',stauf)
-	ttaup = getpar('temptaup')
-	staup = getpar('salttaup')
+	!----------------------------------------
+	! first call - initialize
+	!----------------------------------------
 
 	if( icall .eq. 0 ) then
+
+	  call getfnm('tempobs',tempf)
+	  call getfnm('saltobs',saltf)
+	  call getfnm('temptau',ttauf)
+	  call getfnm('salttau',stauf)
+	  ttaup = getpar('temptaup')
+	  staup = getpar('salttaup')
+
+	  !----------------------------------------
+	  ! opening nudging files for T
+	  !----------------------------------------
+
 	  string = 'temp tau'
 	  write(6,'(a)') 'ts_nudge: opening file for '//trim(string)
 	  call ts_nudge_get_tau(string,ttauf,ttaup,dtime,nkn,nlv,idttau)
@@ -962,6 +989,10 @@
 	    call ts_open(string,tempf,dtime,nkn,nlv,idtemp)
 	  end if
 
+	  !----------------------------------------
+	  ! opening nudging files for S
+	  !----------------------------------------
+
 	  string = 'salt tau'
 	  write(6,'(a)') 'ts_nudge: opening file for '//trim(string)
 	  call ts_nudge_get_tau(string,stauf,staup,dtime,nkn,nlv,idstau)
@@ -972,6 +1003,10 @@
 	    write(6,'(a)') 'ts_nudge: opening file for '//trim(string)
 	    call ts_open(string,saltf,dtime,nkn,nlv,idsalt)
 	  end if
+
+	  !----------------------------------------
+	  ! check values and write to terminal
+	  !----------------------------------------
 
 	  if( btnudge .or. bsnudge ) then
 	    write(6,*) 'nudging has been initialized'
@@ -990,9 +1025,16 @@
 	  icall = 1
 	end if
 
+	!----------------------------------------
+	! regular call
+	!----------------------------------------
+
+	tau_limit = 172000.
+
 	if( btnudge ) then
 	  if( idttau > 0 ) then
             call ts_next_record(dtime,idttau,nlvddi,nkn,nlv,ttauv)
+	    if( tau_limit > 0. ) where( ttauv > tau_limit ) ttauv = 0.
 	    where( ttauv > 0. ) ttauv = 1./ttauv
 	  end if
           call ts_next_record(dtime,idtemp,nlvddi,nkn,nlv,tobsv)
@@ -1001,10 +1043,15 @@
 	if( bsnudge ) then
 	  if( idstau > 0 ) then
             call ts_next_record(dtime,idstau,nlvddi,nkn,nlv,stauv)
+	    if( tau_limit > 0. ) where( stauv > tau_limit ) stauv = 0.
 	    where( stauv > 0. ) stauv = 1./stauv
 	  end if
           call ts_next_record(dtime,idsalt,nlvddi,nkn,nlv,sobsv)
 	end if
+
+	!----------------------------------------
+	! end of routine
+	!----------------------------------------
 
 	end
 
@@ -1040,6 +1087,41 @@
 	write(6,*) 'or set nudging time scale using parameters'
 	write(6,*) 'temptaup and salttaup'
 	stop 'error stop ts_nudge_get_tau: error getting tau'
+	end
+
+!*******************************************************************	
+
+	subroutine ts_nudge_check(dtime,nlvddi,nlv,nkn,tobsv,sobsv &
+     &					,ttauv,stauv)
+
+! checks nudiging values (debug)
+
+	use mod_info_output
+
+	implicit none
+
+	double precision dtime
+	integer nlvddi
+	integer nlv
+	integer nkn
+	real tobsv(nlvddi,nkn)
+	real sobsv(nlvddi,nkn)
+	real ttauv(nlvddi,nkn)
+	real stauv(nlvddi,nkn)
+
+	integer, save :: iu = 6
+
+	if( print_not_quiet_once() ) then
+	write(iu,*) 'checking nudge values at time ',dtime
+	end if
+
+	if( print_verbose() ) then
+	write(iu,*) 'tobs: ',minval(tobsv),maxval(tobsv)
+	write(iu,*) 'sobs: ',minval(sobsv),maxval(sobsv)
+	write(iu,*) 'ttau: ',minval(ttauv),maxval(ttauv)
+	write(iu,*) 'stau: ',minval(stauv),maxval(stauv)
+	end if
+
 	end
 
 !*******************************************************************	
@@ -1081,6 +1163,7 @@
 ! initialization of T/S from file
 
 	use shympi
+	use mod_info_output
 
 	implicit none
 
@@ -1099,25 +1182,27 @@
 	call getfnm('saltin',saltf)
 
 	if( tempf .ne. ' ' ) then
+	  if( print_not_quiet_once() ) then
           write(6,'(a)') 'initializing temperature from file ' &
      &                        //trim(tempf)
+	  end if
 	  string = 'temp init'
 	  call ts_open(string,tempf,dtime,nkn,nlv,id)
           call ts_next_record(dtime,id,nlvddi,nkn,nlv,tempv)
 	  call ts_file_close(id)
 	  call shympi_exchange_3d_node(tempv)
-          write(6,*) 'temperature initialized from file ',trim(tempf)
 	end if
 
 	if( saltf .ne. ' ' ) then
+	  if( print_not_quiet_once() ) then
           write(6,'(a)') 'initializing salinity from file ' &
      &                        //trim(saltf)
+	  end if
 	  string = 'salt init'
 	  call ts_open(string,saltf,dtime,nkn,nlv,id)
           call ts_next_record(dtime,id,nlvddi,nkn,nlv,saltv)
 	  call ts_file_close(id)
 	  call shympi_exchange_3d_node(saltv)
-          write(6,*) 'salinity initialized from file ',trim(saltf)
 	end if
 
 	end

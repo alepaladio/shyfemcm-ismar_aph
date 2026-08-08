@@ -30,9 +30,9 @@
 !
 ! contents :
 !
-! subroutine nlsinh             initializes the hp parameter file
-! subroutine nlsina             initializes the ap parameter file
-! subroutine fnminh             initializes default names
+! subroutine nlsinh             initializes the shyfem parameter sections
+! subroutine nlsina             initializes the post processing parameter file
+! subroutine fnminh             initializes section $name
 !
 ! revision log :
 !
@@ -464,10 +464,11 @@
 ! |idtmet|, |itmmet|	Time step and start time for writing meteo
 !			variables read from file. 
 ! |imetout|		This parameters indicates what meteo parameters
-!			should be output. For wind set it to 1, for heat 10,
-!			for rain 100, and for ice 1000. 
+!			should be output. For wind set it to 1,
+!			for heat data 10,
+!			for rain 100, for ice 1000, and for heat fluxes 10000. 
 !			Combinations are possible, e.g., 11 writes wind 
-!			and heat data, and 1111 writes all available data
+!			and heat data, and 11111 writes all available data
 !			to the file. (Default 0)
 
 	call addpar('idtmet',0.)
@@ -1486,23 +1487,26 @@
 
         call addpar('ipvert',0.)
 
-! |linbot|	Set the bottom layer for vertical releases (Default -1, bottom layer)
+! |linbot|	Set the bottom layer for vertical releases.
+!		(Default -1, bottom layer)
 
         call addpar('linbot',-1.)
 
-! |lintop|	Set the top layer for vertical releases (Default 1, surface layer)
+! |lintop|	Set the top layer for vertical releases.
+!		(Default 1, surface layer)
+
         call addpar('lintop',1.)
 
 ! |stkpar|	Calibration parameter for parameterizing the stokes drift 
 !		induced by waves (and wind). Only affect particle of the sea
 !		surface (layer = 1). The wind file is needed even in offline 
-!		mode (Default 0). 
+!		mode. (Default 0) 
 
         call addpar('stkpar',0.)
 
 ! |dripar|	Parameter to account for drifter inertia by multiplying
 !		the advective transports. Usually it assumes values between 
-!		0.9 and 1.2 (Default 1). 
+!		0.9 and 1.2. (Default 1).
 
         call addpar('dripar',1.)
 
@@ -1977,7 +1981,7 @@
 
 	subroutine fnminh
 
-! initializes default names
+! initializes section $name
 
 	use para
 
@@ -2081,6 +2085,17 @@
 
         call addfnm('bfmini',' ')
 	call addfnm('offlin',' ')
+
+! |fricin|	Name of file containing initial values for friction. The values
+!		must be compatible with the friction type given by |ireib|.
+
+        call addfnm('fricin',' ')
+
+! |eutropa|	Name of file containing parameters for the EUTRO model.
+!		This is a namelist. If not given it uses the internal
+!		set of parameters.
+
+        call addfnm('eutropa',' ')
 
 ! DOCS	END
 

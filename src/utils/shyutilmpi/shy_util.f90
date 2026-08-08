@@ -74,6 +74,10 @@
 ! 07.12.2024    ggu     reduce only to root (not all)
 ! 01.04.2025    ggu     write subrange of variables
 ! 10.04.2025    ggu     new routine shyfem_init_scalar_fix_file() (nfix)
+! 03.10.2025    ggu     for description return and print also short
+! 16.10.2025    ggu     new routines for writing elemental files
+! 17.10.2025    ggu     in shyfem_init_elem_file() use ftype==4 (bug)
+! 21.05.2026    ggu     in shy_check_nvar() check if file is empty and return
 !
 ! contents :
 !
@@ -82,6 +86,8 @@
 ! 
 ! shyfem_init_hydro_file(type,b2d,id)
 ! shyfem_init_scalar_file(type,nvar,b2d,id)
+! shyfem_init_elem_file(type,nvar,b2d,id)
+! shyfem_init_scalar_fix_file(type,nvar,nfix,id)
 ! shyfem_init_lgr_file(type,nvar,b2d,id)
 ! shyfem_init_scalar_file_hlv(type,nvar,nl0,hlv0,id)
 ! 
@@ -93,6 +99,7 @@
 ! shy_write_scalar2d(id,type,dtime,nvar,ivar,c)		!unconditional write 2d
 ! shy_write_scalar_record(id,dtime,ivar,nlvddi,c)	!write scalar 3d
 ! shy_write_scalar_record2d(id,dtime,ivar,c)		!write scalar 2d
+! shy_write_elem_record2d(id,dtime,ivar,c)		!writes 2d elem values
 ! shy_write_hydro_records(id,dtime,nlvddi,z,ze,u,v)	!write hydro
 ! 
 ! shy_sync(id)
@@ -407,7 +414,7 @@
 
 !****************************************************************
 
-	subroutine shy_get_tend(file,datetime,dtime,bok)
+	subroutine shy_get_tend(file,datetime,dtime,nrec,bok)
 
 	use shyfile
 
@@ -416,12 +423,15 @@
 	character*(*) file
 	integer datetime(2)
 	double precision dtime
+	integer nrec
 	logical bok			!could read time ?
 
 	integer iunit,id,ierr
 	integer ivar,n,m,lmax
 	integer date,time
+	integer nk,ne,np,nl,nvar
 
+	nrec = 0
 	bok = .false.
 	dtime = -1.
 
@@ -432,14 +442,42 @@
 
 	call shy_get_date(id,date,time)
 	datetime = (/date,time/)
+	call shy_get_params(id,nk,ne,np,nl,nvar)
 
 	do while( ierr == 0 )
 	  call shy_skip_record(id,dtime,ivar,n,m,lmax,ierr)
+	  nrec = nrec + 1
 	end do
+	nrec = nrec - 1
+	nrec = nrec / nvar
 	if( ierr > 0 ) return
 
 	call shy_close(id)
 	bok = .true.
+
+	end
+
+!****************************************************************
+
+	subroutine shy_get_atimes(file,atimes)
+
+	use shyfile
+
+	implicit none
+
+	character*(*) file
+	double precision atimes
+
+	integer datetime(2)
+	integer nrec
+	logical bok			!could read time ?
+
+	integer iunit,id,ierr
+	integer ivar,n,m,lmax
+	integer date,time
+	integer nk,ne,np,nl,nvar
+
+	nrec = 0
 
 	end
 
@@ -514,6 +552,40 @@
         call shy_set_simul_params(id)
         call shy_make_header(id)
 	call trace_point('end shyfem_init_scalar_file')
+
+        end
+
+!****************************************************************
+
+        subroutine shyfem_init_elem_file(type,nvar,b2d,id)
+
+! initializes elem file with layer structure from str
+
+        use levels
+        use shympi
+	use mod_trace_point
+
+        implicit none
+
+        character*(*) type      !type of file, e.g., hydro, ts, wave
+        integer nvar		!total number of scalars to be written
+        logical b2d		!2d fields
+        integer id		!id for file (return)
+
+        integer ftype,npr,nlg
+        character*80 file,ext,aux
+
+        aux = adjustl(type)
+        ext = '.' // trim(aux) // '.shy'        !no blanks in ext
+        ftype = 4
+        npr = 1
+        nlg = nlv_global
+        if( b2d ) nlg = 1
+
+        call shy_make_output_name(trim(ext),file)
+        call shy_open_output_file(file,npr,nlg,nvar,ftype,id)
+        call shy_set_simul_params(id)
+        call shy_make_header(id)
 
         end
 
@@ -699,6 +771,7 @@
 	use shyfile
 	use shympi
 	use mod_trace_point
+	use mod_info_output
 
 	implicit none
 
@@ -741,7 +814,9 @@
 	call trace_point('after shy_copy_levels_to_shy')
 
 	if( bopen ) then
+	  if( print_verbose_once() ) then
 	  write(6,*) 'initialized shy file ',trim(file)
+	  end if
 	end if
 
 !-----------------------------------------------------
@@ -791,7 +866,7 @@
 
 !****************************************************************
 
-	subroutine shy_get_string_descriptions(id,nvar,ivars,strings)
+	subroutine shy_get_string_descriptions(id,nvar,ivars,strings,shorts)
 
 	use shyfile
 
@@ -801,8 +876,9 @@
 	integer nvar
 	integer ivars(nvar)
 	character*(*) strings(nvar)
+	character*(*) shorts(nvar)
 
-	integer irec,nrec,ierr,i,isub
+	integer irec,nrec,ierr,i,isub,iv
 	integer ftype
 	integer ivar,n,m,lmax
 	double precision dtime
@@ -824,6 +900,9 @@
 	  strings(2) = 'water level (elemental)'
 	  strings(3) = 'transport (velocity) x'
 	  strings(4) = 'transport (velocity) y'
+	  do iv=1,nvar
+	    call ivar2short(ivars(iv),shorts(iv))
+	  end do
 	else
 	  irec = 0
 	  nrec = 0
@@ -835,6 +914,7 @@
 	    irec = irec + 1
 	    ivars(irec) = ivar
 	    call ivar2string(ivar,strings(irec),isub)
+	    call ivar2short(ivar,shorts(irec))
 	    if( isub > 0 ) then
 	      write(saux,'(i5)') isub
 	      saux = adjustl(saux)
@@ -866,6 +946,7 @@
 	integer id
 	integer nvar
 
+	logical bempty
 	integer irec,nrec,ierr,i,isub
 	integer ftype
 	integer ivar,n,m,lmax,ivar_first
@@ -889,6 +970,7 @@
 	irec = 0	!records with data
 	nrec = 0	!records read (also ivar<0)
 	ivar_first = -999
+	dtime0 = -1.
 
 	do
 	  call shy_skip_record(id,dtime,ivar,n,m,lmax,ierr)
@@ -903,6 +985,9 @@
 	  irec = irec + 1
 	end do
 
+	bempty = .false.
+	if( ierr == -1 .and. irec == 0 ) bempty = .true.
+
 	dtime0 = dtime
 	if( ierr /= 0 ) then
 	  call shy_back_one(id,ierr)	!this skips over EOF
@@ -912,6 +997,7 @@
 	call shy_back_records(id,nrec,ierr)
 	if( ierr /= 0 ) goto 97
 	if( irec == nvar ) return
+	if( bempty ) return
 
 !	here error management
 
@@ -934,25 +1020,49 @@
 
 !****************************************************************
 
-	subroutine shy_print_descriptions(nvar,ivars,strings)
+	subroutine shy_print_descriptions(nvar,ivars,strings,shorts)
 
 	implicit none
 
 	integer nvar
 	integer ivars(nvar)
 	character*(*) strings(nvar)
+	character*(*) shorts(nvar)
 
-	integer iv,ivar
+	integer iv,ivar,ns,iaux
+	logical bvel
 	character*6 aux
+	character*80 string,short
+	character*80 tshort
 
         write(6,*) 'total number of available variables: ',nvar
-        write(6,*) '   varnum     varid      varname'
+
+	ns = 0
+	bvel = .false.
+	do iv=1,nvar
+          ivar = ivars(iv)
+	  short = shorts(iv)
+	  ns = max(ns,len_trim(short))
+	  if( ivar == 3 ) bvel = .true.
+	end do
+	ns = max(ns,5)		!minimum 5
+
+	iaux = 1
+	if( bvel ) iaux = 6	!keep space for hydro file
+	aux = ' '
+	tshort = ' '
+	tshort(ns-5+1:) = 'short'
+        write(6,*) 'varnum varid ' // aux(1:iaux-1) &
+     &				// trim(tshort) // ' varname'
 
         do iv=1,nvar
           ivar = ivars(iv)
 	  aux = ' '
 	  if( ivar == 3 ) aux = ' (2)  '
-          write(6,'(2i10,a,a)') iv,ivar,aux,trim(strings(iv))
+	  short = shorts(iv)
+	  string = strings(iv)
+          write(6,'(1x,2i6,a,a,a,a)') iv,ivar,aux(1:iaux) &
+     &			,short(1:ns),' ',trim(string)
         end do
 
 	end
@@ -1197,11 +1307,32 @@
 	real c(nkn)
 
 	logical, parameter :: belem = .false.
-	integer iaux
 
 	if( id <= 0 ) return
 
 	call shy_write_output_record(id,dtime,ivar,belem,nkn,1,1,1,c)
+
+	end
+
+!****************************************************************
+
+	subroutine shy_write_elem_record2d(id,dtime,ivar,c)
+
+	use basin
+	use shyfile
+
+	implicit none
+
+	integer id
+	double precision dtime
+	integer ivar
+	real c(nel)
+
+	logical, parameter :: belem = .true.
+
+	if( id <= 0 ) return
+
+	call shy_write_output_record(id,dtime,ivar,belem,nel,1,1,1,c)
 
 	end
 

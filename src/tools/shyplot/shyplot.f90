@@ -82,6 +82,11 @@
 ! 10.09.2024    ggu     bug fix avoiding divide by zero in mod(irec,ifreq) /= 0
 ! 16.09.2024    ggu     same as above also for lgr plotting
 ! 18.09.2024    ggu     new parameters bcolplot, lgrcol, lgrtyp, plot age
+! 07.10.2025    ggu     use shorts in call to description
+! 10.10.2025    ggu     get shorts for description
+! 13.10.2025    ggu     set spherical for bas plotting, new bintp
+! 17.10.2025    ggu     prepared for elemental values
+! 15.01.2026    ggu     write layer number that is plotted to terminal
 !
 ! notes :
 !
@@ -128,7 +133,8 @@
 
 	implicit none
 
-	integer ivar
+	integer ivar,isphe
+	real getpar
 
         call read_command_line_file(basfilename)
 
@@ -136,10 +142,13 @@
 
 	call bash_verbose(bsdebug)
 	call ev_set_verbose(.not.bquiet)
-        !call ev_init(nel)
-        call set_ev
 
+	call bas_check_spherical
+	call bas_get_spherical(isphe)
+        call set_coords_ev(isphe)
+        call set_ev
         call set_geom
+        call get_coords_ev(isphe)
 
         call mod_depth_init(nkn,nel)
         call mod_hydro_plot_init(nkn,nel,1,nel)
@@ -174,6 +183,7 @@
         use shyfile
         use shyutil
         use shympi
+	use intp_fem_file
 
         use basin
         use levels
@@ -239,7 +249,7 @@
 
         integer, save 		        :: nn_old,nt_old,na_old
         integer n_act,n_new,n_ext,n_init,n_typ
-        integer ncust
+        integer ncust,llmax
         character*80 name
         logical ptime_ok,ptime_end
         integer irec,nplot,idx
@@ -335,7 +345,7 @@
 	!--------------------------------------------------------------
 
         call shy_get_iunit(id,iunit)
-        read(iunit) ncust
+	call lgr_get_header(iunit,nvers,llmax,ncust)
 
 	!--------------------------------------------------------------
 	! set time
@@ -343,6 +353,7 @@
 
         call ptime_init
 	call shy_get_date(id,date,time)
+	call iff_init_global_date_internal(date,time)
         call dts_to_abs_time(date,time,atime0)
         call ptime_set_date_time(date,time)
         call elabtime_date_and_time(date,time)
@@ -384,7 +395,7 @@
         else if( name .eq. 'lagage' ) then    !age [d]
            write(6,*)'Variable to be plotted: particles age'
         else if( name .eq. 'lagcus' ) then	!custom
-           write(6,*)'Variable to be plotted: particle custom prop.'
+           write(6,*)'Variable to be plotted: particle custom property'
         else
            goto 99
         end if
@@ -769,10 +780,12 @@
 	integer, allocatable :: il(:)
 	integer, allocatable :: ivars(:)
 	character*80, allocatable :: strings(:)
+	character*80, allocatable :: shorts(:)
 
-	logical bhydro,bscalar,bsect,bvect,bvel,bcycle,belem
-	logical bregplot,bregdata
+	logical bhydro,bscalar,bsect,bvect,bvel,bcycle,belem,bselem
+	logical bregplot,bregdata,bintp
 	logical btime
+	logical bprogress
 	integer nx,ny
 	integer irec,nplot,nread,nin,nold
 	integer nvers
@@ -792,6 +805,7 @@
 	integer nzadapt
 	character*80 title,name,file
 	character*80 basnam,simnam,varline
+	character*20 aline
 	real rnull
 	real cmin,cmax,cmed,vtot
         real simpar(3),rzmov
@@ -818,6 +832,7 @@
 	id = 0
 	idold = 0
 	bregdata = .false.	!shy file data is not regular
+	bprogress = bquiet .and. .not. bsilent
 
 	!--------------------------------------------------------------
 	! set command line parameters
@@ -833,6 +848,8 @@
 
 	call open_next_file_by_name(shyfilename,idold,id)
 	if( id == 0 ) stop
+
+	if( bprogress ) call handle_progress(aline,shyfilename)
 
 	!--------------------------------------------------------------
 	! set up params and modules
@@ -865,13 +882,18 @@
 	znv = 0.
 	zenv = 0.
 
-        isphe = nint(getpar('isphe'))
-        call set_coords_ev(isphe)
+	call bash_verbose(bsdebug)
 	call ev_set_verbose(.not.bquiet)
+        isphe = nint(getpar('isphe'))
+        if( isphe /= -1 ) then
+	  call set_coords_ev(isphe)
+	  call bas_set_spherical(isphe)
+	end if
         call set_ev
         call set_geom
         call get_coords_ev(isphe)
         call putpar('isphe',float(isphe))
+	if( bverb ) write(6,*) 'isphe = ',isphe
 
 	!--------------------------------------------------------------
 	! set time
@@ -890,6 +912,7 @@
 
 	bhydro = ftype == 1
 	bscalar = ftype == 2
+	bselem = ftype == 4
 
 	if( bhydro ) then		!OUS
 	  if( nvar /= 4 ) goto 71
@@ -900,6 +923,10 @@
 	  nndim = nkn
 	  allocate(il(nkn))
 	  il = ilhkv
+        else if( bselem ) then          !EOS
+          nndim = nel
+          allocate(il(nel))
+          il = ilhv
 	else
 	  goto 76	!relax later
 	end if
@@ -908,7 +935,7 @@
 	allocate(cv3(nlv,nndim))
 	allocate(cv3all(nlv,nndim,0:nvar))
 	allocate(idims(4,nvar))
-	allocate(ivars(nvar),strings(nvar))
+	allocate(ivars(nvar),strings(nvar),shorts(nvar))
 
 	!--------------------------------------------------------------
 	! set up aux arrays, sigma/z info and depth values
@@ -936,8 +963,8 @@
 
 	call init_plot
 
-	call shy_get_string_descriptions(id,nvar,ivars,strings)
-	call choose_var(nvar,ivars,strings,varline,ivarplot,bvect)
+	call shy_get_string_descriptions(id,nvar,ivars,strings,shorts)
+	call choose_var(nvar,ivars,strings,shorts,varline,ivarplot,bvect)
 
 	bsect = getisec() /= 0
 	call setlev(layer)
@@ -969,6 +996,10 @@
 ! loop on data (time loop)
 !--------------------------------------------------------------
 
+	if( .not. bquiet ) then
+	  write(6,*) 'plotting layer ',layer
+	end if
+
 	dtime = 0.
 	cv3 = 0.
 	cv3all = 0.
@@ -979,7 +1010,7 @@
 	 ! read new data set
 	 !--------------------------------------------------------------
 
-	 call read_records(id,dtime,bhydro,nvar,nndim,nlvdi,idims &
+	 call read_records(id,dtime,ftype,nvar,nndim,nlvdi,idims &
      &				,cv3,cv3all,ierr)
 
          if(ierr.ne.0) exit
@@ -1088,7 +1119,13 @@
 	 btime = btime .and. .not. bsilent
 	 !write(6,*) btime,bverb,bsilent,ivar
 	 if( btime ) then
-	   call shy_write_time2(irec,atime,ivar)
+	   if( bprogress ) then
+	     call dts_format_abs_time(atime,aline)
+	     !call handle_progress(aline)
+	     call handle_progress(aline,shyfilename)
+	   else
+	     call shy_write_time2(irec,atime,ivar)
+	   end if
 	 end if
 
 	 call make_mask(layer)
@@ -1096,7 +1133,8 @@
 	 if( bsect ) then
 	   call plot_sect(bvel,cv3)
 	 else if( bvel ) then
-	   call plovect(ivel,'3D ',bregdata)
+	   bintp = .true.
+	   call plovect(ivel,'3D ',bregdata,bintp)
 	 else
            call plo_scal_val(n,cv2,varline)
 	 end if
@@ -1180,7 +1218,7 @@
 	integer datetime(2)
 	integer itype(2)
 	integer ivarplot(2),ivs(2)
-	real x0,y0,dx,dy
+	real x0,y0,dx,dy,x1,y1
 	real regpar(7)
 	real flag
 	double precision dtime,atime,atime0
@@ -1197,6 +1235,7 @@
         !integer,allocatable :: ilhkv(:)
         integer,allocatable :: ivars(:)
         character*80, allocatable :: strings(:)
+        character*80, allocatable :: shorts(:)
 
 	integer getisec
 	real getpar
@@ -1305,6 +1344,7 @@
           call set_ev
           call get_coords_ev(isphe)
           call putpar('isphe',float(isphe))
+	  if( bverb ) write(6,*) 'isphe = ',isphe
 
           call set_geom
 
@@ -1338,10 +1378,15 @@
 	  end if
 	end if
 
+	call bash_set_regpar(regpar)
+	if( bregall ) call bash_set_regall(.true.)
+	call basinit
+
         nvar0 = nvar
         lmax0 = lmax
         np0 = np
         allocate(strings(nvar))
+        allocate(shorts(nvar))
         allocate(ivars(nvar))
         allocate(dext(nvar))
         allocate(data2d(np))
@@ -1362,9 +1407,10 @@
           if( ierr .ne. 0 ) goto 97
           strings(i) = string
 	  call string2ivar(strings(i),ivars(i))
+	  call ivar2short(ivars(i),shorts(i))
         end do
 
-	call choose_var(nvar,ivars,strings,varline,ivarplot,bvect)
+	call choose_var(nvar,ivars,strings,shorts,varline,ivarplot,bvect)
 	call get_vars_to_plot(nvar,ivars,ivar3,ivarplot,bvect,ivnum,ivs)
 	call set_ivel(ivar3,ivel)
 	bvel = ivel > 0
@@ -1422,7 +1468,7 @@
 
 	call init_regular
 	call info_regular(bregplot,nx,ny,dx,dy)
-	if( bregplot ) then
+	if( bregplot .and. bquiet ) then
 	  write(6,*) 'regular grid plotting: ',nx,ny,dx,dy
 	end if
 
@@ -1433,6 +1479,10 @@
         !--------------------------------------------------------------
         ! loop on records
         !--------------------------------------------------------------
+
+	if( .not. bquiet ) then
+	  write(6,*) 'plotting layer ',layer
+	end if
 
         irec = 0
 	nplot = 0
@@ -1555,7 +1605,7 @@
 	  if( bregdata ) then
 	    call reset_mask
 	    if( bvect ) then
-	      call plovect(ivel,'3D ',bregdata)
+	      call plovect(ivel,'3D ',bregdata,bintp)
 	    else
 	      call ploreg(np,data2d,regpar,varline,bintp)
 	    end if
@@ -1567,7 +1617,7 @@
             call adjust_layer_index(nel,nlv,hev,hlv,ilhv)
 	    call make_mask(layer)
 	    if( bvect ) then
-	      call plovect(ivel,'3D ',bregdata)
+	      call plovect(ivel,'3D ',bregdata,bintp)
 	    else
 	      call ploval(np,data2d,varline)
 	    end if
@@ -1963,7 +2013,7 @@
 
 !*****************************************************************
 
-	subroutine choose_var(nvar,ivars,strings,varline,ivarplot,bvect)
+	subroutine choose_var(nvar,ivars,strings,shorts,varline,ivarplot,bvect)
 
 	use plotutil
 	use levels
@@ -1981,6 +2031,7 @@
 	integer nvar
 	integer ivars(nvar)
 	character*80 strings(nvar)
+	character*80 shorts(nvar)
 	character*80 varline
 	integer ivarplot(2)
 
@@ -1993,7 +2044,7 @@
 !	---------------------------------------------------
 
 	if( .not. bquiet ) then
-	  call shy_print_descriptions(nvar,ivars,strings)
+	  call shy_print_descriptions(nvar,ivars,strings,shorts)
 	end if
 
 !	---------------------------------------------------
@@ -2244,6 +2295,46 @@
         call dts_format_abs_time(atime,dline)
 	write(6,1000) irec,ivar,atime,'  ',trim(dline),extra
  1000	format(2i8,f16.2,a,a,a)
+
+        end
+
+!*****************************************************************
+
+	subroutine handle_progress(string,file)
+
+	use mod_progress_bar
+
+	implicit none
+
+	character*(*) string
+	character*(*) file
+
+	logical, save :: binit = .false.
+	integer, save :: icall = 0
+	integer, save :: nrecmax = 0
+
+	logical bok
+	integer nrec
+	integer datetime(2)
+	double precision dtime
+	real progress
+
+	if( .not. binit ) then
+	  !write(6,*) 'starting to set up progress bar'
+	  call shy_get_tend(file,datetime,dtime,nrec,bok)
+	  binit = .true.
+	  nrecmax = nrec
+	  !write(6,*) 'bprogress setup: ',nrec
+	  write(6,*) 'records to handle: ',nrecmax
+	  call progress_bar_init(string)
+	  return
+	end if
+
+	icall = icall + 1
+	progress = icall / float(nrecmax)
+	!write(6,*) 'progress = ',progress
+
+	call progress_bar_print(string,progress)
 
         end
 

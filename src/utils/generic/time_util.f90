@@ -120,6 +120,9 @@
 ! 16.02.2020	ggu	new routines get_time_iterations(), get_ddt()
 ! 03.04.2020	ggu	new routine get_real_time()
 ! 18.05.2022	ggu	new routines cpu_time_*()
+! 24.10.2025	ggu	new routine is_time_absolute()
+! 29.04.2026	ggu	new routines for cpu_time_ routines
+! 05.05.2026	ggu	adjusted overflow for d1000
 !
 !**********************************************************************
 !**********************************************************************
@@ -134,16 +137,38 @@
         integer, save :: itunit,idtorig
 
 	double precision, save :: t_act,dt_act,dt_orig,atime0,dtanf,dtend
+	double precision, parameter :: secs_in_year = 365*86400
+	double precision, parameter :: d1000 = 1000*secs_in_year
 
 	logical, save :: bsync
 
 	character*20, save :: aline_act
 
-	integer, parameter :: ncpu = 10
+	integer, parameter :: ncpu = 30
+	integer, save :: maxcpu = 0
+	integer, save :: maxshow = 0
 	double precision, save :: cputime(ncpu)
 	double precision, save :: acutime(ncpu)
+	character*80, save     :: cpustring(ncpu)
 
 	end module femtime
+
+!**********************************************************************
+
+	function is_time_absolute(dtime)
+
+! true if in initialization phase
+
+	use femtime
+
+	implicit none
+
+	logical is_time_absolute
+	double precision dtime
+
+	is_time_absolute = dtime > d1000	! > 1000 years
+
+	end
 
 !**********************************************************************
 
@@ -443,17 +468,53 @@
 !********************************************************************
 !********************************************************************
 !********************************************************************
+! subroutines dealing with cpu timing
+!********************************************************************
+!********************************************************************
+!********************************************************************
+!
+! cpu_time_init(itime,string)
+! cpu_time_start(itime)
+! cpu_time_end(itime)
+! cpu_time_get(itime,time,string)
+!
+!********************************************************************
 
-        subroutine cpu_time_init
+        subroutine cpu_time_local_initialize
 
 	use femtime
 
         implicit none
 
+	logical, save :: binit = .false.
+
+	if( binit ) return
+	binit = .true.
+
 	cputime = 0.
 	acutime = 0.
+	cpustring = ' '
 
         end
+
+!********************************************************************
+
+        subroutine cpu_time_init(itime,string)
+
+	use femtime
+
+        implicit none
+
+	integer itime
+	character*(*) string
+
+        call cpu_time_local_initialize
+
+	call cpu_time_error(itime)
+
+	cpustring(itime) = string
+
+	end
 
 !********************************************************************
 
@@ -467,8 +528,7 @@
 
 	real time
 
-	if( itime < 1 ) stop 'error stop cpu_time_accum: itime'
-	if( itime > ncpu ) stop 'error stop cpu_time_accum: itime'
+        call cpu_time_error(itime)
 
 	call cpu_time(time)
 	cputime(itime) = time
@@ -488,8 +548,7 @@
 	real time
 	double precision dtime
 
-	if( itime < 1 ) stop 'error stop cpu_time_accum: itime'
-	if( itime > ncpu ) stop 'error stop cpu_time_accum: itime'
+        call cpu_time_error(itime)
 
 	call cpu_time(time)
 	dtime = time - cputime(itime)
@@ -499,7 +558,7 @@
 
 !********************************************************************
 
-        subroutine cpu_time_get(itime,time)
+        subroutine cpu_time_get(itime,time,string)
 
 	use femtime
 
@@ -507,13 +566,48 @@
 
 	integer itime
 	real time
+	character*(*) string
 
-	if( itime < 1 ) stop 'error stop cpu_time_accum: itime'
-	if( itime > ncpu ) stop 'error stop cpu_time_accum: itime'
+        call cpu_time_error(itime)
 
 	time = acutime(itime)
+	string = cpustring(itime)
 
         end
+
+!********************************************************************
+
+        subroutine cpu_time_get_maxcpu(itmax)
+
+	use femtime
+
+        implicit none
+
+	integer itmax
+
+	itmax = maxcpu
+	if( maxshow > 0 ) itmax = maxshow
+
+        end
+
+!********************************************************************
+
+        subroutine cpu_time_error(itime)
+
+	use femtime
+
+        implicit none
+
+	integer itime
+
+	if( itime < 1 .or. itime > ncpu ) then
+	  write(6,*) 'itime,ncpu: ',itime,ncpu
+	  stop 'error stop cpu_time: itime out of bounds'
+	end if
+
+	maxcpu = max(maxcpu,itime)
+
+	end
 
 !********************************************************************
 !********************************************************************

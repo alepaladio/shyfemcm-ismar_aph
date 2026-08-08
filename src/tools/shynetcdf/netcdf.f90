@@ -76,6 +76,13 @@
 ! 03.10.2024	ggu	new variables added
 ! 01.04.2025	ggu	handle variables with no CL description
 ! 07.04.2025	ggu	new routine handle_time_string()
+! 17.06.2025	ggu	deal with description == 'unknown'
+! 19.06.2025	ggu	new routine nc_check_file_format()
+! 30.09.2025	ggu	handle variables with no CL description
+! 01.10.2025	ggu	accept different reference date
+! 15.01.2026	ggu	better error message in nc_define_3d_reg()
+! 06.05.2026	ggu	new routine nc_get_quiet()
+! 09.06.2026	ggu	introduced bcomperror for handling compiler error
 !
 ! notes :
 !
@@ -129,11 +136,16 @@
 	character*80, save :: time_dim = ' '	!dimension name of time
 	character*80, save :: time_var = ' '	!variable name of time
 
+	double precision, save :: dtime0 = 0.	!extra for different reference
+	character*80, save :: tref = ' '	!reference date
+	!character*80, save :: tref = '1970-01-01::00:00:00'	!reference date
+
 	integer, save :: ntime_recs = 0		!how many time records
 	logical, save :: btime_is_char = .false. !time is a string ... special
 
 	logical, save :: bdebug_nc = .false.
 	logical, save :: bquiet_nc = .false.
+	logical, save :: bverbose_nc = .false.
 
 ! if b_use_cf_role == .true. then cf_convention must be CF-1.4
 ! CF-1.6 does not understand cf_role (-> error)
@@ -1303,6 +1315,7 @@
 	double precision t
 
 	logical bdebug
+	logical, parameter :: bcomperror = .false.
 	integer retval
 	character*80 time,time_d,time_v
 	character*80 name
@@ -1363,6 +1376,9 @@
 	  ntime_recs = crecs
 	  btime_is_char = .true.
 
+	  if( bcomperror ) then
+	    write(6,*) 'correcting compiler error'
+	  end if
 	end if
 	icall = icall + 1
 
@@ -1390,7 +1406,15 @@
 	t = 0
 	if( irec == 0 ) return
 
+	if( bcomperror ) then	! here we have to read time records again
+	  if( allocated(ctimes) ) deallocate(ctimes)
+	  allocate(character(LEN=clen) ::  ctimes(ntime_recs))
+	  retval = nf_get_var_text(ncid,time_id,ctimes)
+	  call nc_handle_err(retval,'get_time_rec')
+	end if
+
 	string = ctimes(irec)
+	if( string == ' ' ) goto 99
 	iu = index(string,'_')
 	it = index(string,'T')
 	if( iu > 0 ) then
@@ -1411,7 +1435,12 @@
 
 	t = atime
 
-	!stop 'forced stop in handle_time_string'
+	return
+  99	continue
+	write(6,*) 'time string for record ',irec,' is empty'
+	write(6,*) 'probable compiler error for ctimes'
+	write(6,*) 'please set bcomperror=.true. in handle_time_string()'
+	stop 'error stop handle_time_string: compiler error'
 	end
 
 !*****************************************************************
@@ -1588,15 +1617,15 @@
 	if( .not. nc_has_err(retval) ) then
 	  call nc_get_var_attrib(ncid,var_id,aname,atext,avalue)
 	  description = atext
-	  return
 	end if
+
+	if( description /= ' ' .and. description /= 'unknown' ) return
 
 	aname = 'long_name'
 	retval = nf_inq_att(ncid,var_id,aname,xtype,length)
 	if( .not. nc_has_err(retval) ) then
 	  call nc_get_var_attrib(ncid,var_id,aname,atext,avalue)
 	  description = atext
-	  return
 	end if
 
 	end
@@ -1852,7 +1881,7 @@
 	if( nc_has_err(retval) ) return	!no such attribute name
 
 	if( xtype .eq. 12 ) then
-	  write(6,*) 'this is a netcdf-4 which contains string values'
+	  write(6,*) 'this is a netcdf-4 file which contains string values'
 	  write(6,*) 'this file cannot be read by the present routines'
 	  write(6,*) 'please convert this file to netcdf-3 with ncks:'
 	  write(6,*) '   ncks -3 nc4-file.nc nc3-file.nc'
@@ -1885,6 +1914,46 @@
    99	continue
 	write(6,*) 'len = ',len,'  max possible is 1000'
 	stop 'error stop nc_get_var_attrib: len > 1000'
+	end
+
+!*****************************************************************
+
+	subroutine nc_check_file_format(ncid,iformat_max,iformat)
+
+	use netcdf_params
+
+	implicit none
+
+	integer ncid
+	integer iformat_max	!maximum format that can be handled
+	integer iformat
+
+	integer nvars,xtype,len,var_id
+	integer retval
+	logical bstop
+	character*20 aname
+
+	aname = 'standard_name'
+	iformat = 3
+	bstop = ( iformat_max <= 3 )
+
+	call nc_get_var_totnum(ncid,nvars)
+
+	do var_id=1,nvars
+	  retval = nf_inq_att(ncid,var_id,aname,xtype,len)
+	  if( nc_has_err(retval) ) cycle
+	  if( xtype == 12 ) iformat = 4
+	end do
+
+	if( iformat > iformat_max ) then
+	  write(6,*) 'this is a netcdf-4 file which contains string values'
+	  write(6,*) 'this file cannot be read by the present routines'
+	  write(6,*) 'please convert this file to netcdf-3 with ncks:'
+	  write(6,*) '   ncks -3 nc4-file.nc nc3-file.nc'
+	  write(6,*) 'you might have to install the nco package'
+	  stop 'error stop nc_check_file_format: string format unsupported'
+	end if
+
 	end
 
 !*****************************************************************
@@ -2090,8 +2159,18 @@
 
 	integer retval
 
+	if( what == ' ' ) then
+	  write(6,*) 'description of variable is empty'
+	end if
+
         retval = nf_def_var(ncid, what, NF_REAL, 4, dimids_3d           &
      &                          ,var_id)
+	if( retval /= 0 ) then
+	  write(6,*) 'retval = ',retval
+	  write(6,*) 'var_id = ',var_id
+	  write(6,*) 'what =   ',trim(what)
+	end if
+
 	call nc_handle_err(retval,'define_3d_reg')
 
 	end
@@ -2526,8 +2605,7 @@
 	double precision dtime
 
 	dtime = it
-	retval = nf_put_vara_double(ncid, rec_varid, irec, 1, dtime)
-	call nc_handle_err(retval,'write_time')
+	call nc_write_dtime(ncid,irec,dtime)
 
 	end
 
@@ -2544,8 +2622,10 @@
 	double precision dtime
 
 	integer retval
+	double precision ctime
 
-	retval = nf_put_vara_double(ncid, rec_varid, irec, 1, dtime)
+	ctime = dtime + dtime0		!convert to other reference
+	retval = nf_put_vara_double(ncid, rec_varid, irec, 1, ctime)
 	call nc_handle_err(retval,'write_dtime')
 
 	end
@@ -2913,8 +2993,8 @@
 
 	if( errcode .eq. nf_noerr ) return
 
-	if( present(string) ) write(6,*) trim(string)
-	write(6,*) 'Error: ', nf_strerror(errcode)
+	if( present(string) ) write(6,*) '*** error found in: ',trim(string)
+	write(6,*) 'description of error: ', trim(nf_strerror(errcode))
 
 	stop 'error stop nc_handle_err'
 	end
@@ -3081,7 +3161,9 @@
 
 	subroutine nc_convert_date(date0,time0,date)
 
-! converts data n integer to character
+! converts date from integer to character string
+
+	use netcdf_params, only : dtime0,tref
 
 	implicit none
 
@@ -3091,9 +3173,12 @@
 	integer aux,year,month,day
 	integer hour,min,sec
 	integer i
+	integer ierr
+	double precision atime0,atime_ref
+	character*80 saux
 
 !-----------------------------------------------
-! convert date and time
+! convert date and time - dtime is relative to this date
 !-----------------------------------------------
 
 	aux = date0
@@ -3102,6 +3187,8 @@
 	if( month .le. 0 ) month = 1
 	if( day .le. 0 ) day = 1
 	call nc_unpack_date(time0,hour,min,sec)
+
+	call dts_to_abs_time(aux,time0,atime0)
 
 	!write(6,*) 'date0: ',date0,year,month,day
 	!write(6,*) 'time0: ',time0,hour,min,sec
@@ -3113,9 +3200,37 @@
 	call nc_format_date(date,year,month,day,hour,min,sec,'UTC')
 
 !-----------------------------------------------
+! see if we have to change reference date
+!-----------------------------------------------
+
+	if( tref == ' ' ) return	!no, reference date is in date0,time0
+
+	call dts_string2time(tref,atime_ref,ierr)
+	if( ierr /= 0 ) goto 99
+
+	dtime0 = atime0 - atime_ref
+
+!-----------------------------------------------
+! convert tref to nc format
+!-----------------------------------------------
+
+	saux = tref
+	i = index(saux,'::')
+	if( i == 0 ) goto 99
+	saux = saux(:i-1) // ' ' // saux(i+2:)
+	saux = trim(saux) // ' UTC'
+	date = saux
+
+!-----------------------------------------------
 ! end of routine
 !-----------------------------------------------
 
+	return
+   99	continue
+	write(6,*) 'error converting date string:'
+	write(6,*) 'date: ',trim(date)
+	write(6,*) 'tref: ',trim(tref)
+	stop 'error stop nc_convert_date: converting date string'
 	end
 
 !*****************************************************************
@@ -3152,6 +3267,21 @@
 	end
 	
 !*****************************************************************
+
+	subroutine nc_set_ref_date(date0)
+
+	use netcdf_params
+
+	implicit none
+
+	character*(*) date0
+	integer ierr
+
+	tref = date0
+
+	end
+
+!*****************************************************************
 !*****************************************************************
 ! variable initialization
 !*****************************************************************
@@ -3172,7 +3302,7 @@
 	integer var_id		! id to be used for other operations (return)
 
 	character*80 name,what,std,units
-	character*80 string
+	character*80 string,short
 	real cmin,cmax
 
 	if( ivar .eq. 1 ) then		! water level
@@ -3424,19 +3554,22 @@
 	  write(6,*) 'unknown variable: ',ivar
 	  stop 'error stop nc_init_variable'
 	else
-	  write(6,*) 'this variable has no CL description: ',ivar
-	  call make_unknown_variable_name(ivar,string)
-	  !write(string,'(i4)') ivar
-	  !string = adjustl(string)
+	  call make_unknown_variable_name(ivar,short,string,units)
+	  if( bverbose_nc ) then
+	    write(6,*) 'this variable has no CL description: ',ivar
+	    write(6,*) 'string: ',trim(string)
+	    write(6,*) 'short: ',trim(short)
+	    write(6,*) 'units: ',trim(units)
+	  end if
 	  name = string
+	  name = short
 	  what = 'long_name'
 	  std = string
 	  cmin = 0.
 	  cmax = 0.
-	  units = ''
 	end if
 
-	if( .not. bquiet_nc ) then
+	if( bverbose_nc ) then
 	  write(6,*) 'nc variable ',ivar,trim(name)
 	end if
 
@@ -3472,18 +3605,21 @@
 !*****************************************************************
 !*****************************************************************
 
-	subroutine make_unknown_variable_name(ivar,string)
+	subroutine make_unknown_variable_name(ivar,short,string,units)
 
 	use shyfem_strings
 
 	implicit none
 
 	integer ivar
+	character*(*) short
 	character*(*) string
+	character*(*) units
 
 	integer isub,i
 	character*80 saux
 
+	call strings_get_short_name(ivar,short)
         call strings_get_full_name(ivar,saux,isub)
 	
 	!--------------------------------
@@ -3496,23 +3632,53 @@
 	if( i > 0 ) saux(i:) = saux(i+1:)
 
 	!--------------------------------
+	! extract units
+	!--------------------------------
+
+	units = ' '
+	i = index(saux,'[')
+	if( i > 0 ) then
+	  units = saux(i+1:)
+	  saux = saux(:i-1)
+	  i = index(units,']')
+	  if( i == 0 ) then
+	    stop 'error stop make_unknown_variable_name: cannot parse unit'
+	  end if
+	  units = units(:i-1)
+	end if
+	
+	!--------------------------------
 	! convert blanks to underscores
 	!--------------------------------
 
 	do i=1,len_trim(saux)
 	  if( saux(i:i) == ' ' ) saux(i:i) = '_'
 	end do
+        string = saux
 
 	!--------------------------------
 	! add substring
 	!--------------------------------
 
-        string = saux
         if( isub > 0 ) then
           write(saux,'(i4)') isub
 	  saux = adjustl(saux)
           string = trim(string) // '_' // saux
         end if
+
+	end
+
+!*****************************************************************
+
+	subroutine nc_set_verbose(bverbose)
+
+	use netcdf_params
+
+	implicit none
+
+	logical bverbose
+
+	bverbose_nc = bverbose
 
 	end
 
@@ -3527,6 +3693,20 @@
 	logical bquiet
 
 	bquiet_nc = bquiet
+
+	end
+
+!*****************************************************************
+
+	subroutine nc_get_quiet(bquiet)
+
+	use netcdf_params
+
+	implicit none
+
+	logical bquiet
+
+	bquiet = bquiet
 
 	end
 

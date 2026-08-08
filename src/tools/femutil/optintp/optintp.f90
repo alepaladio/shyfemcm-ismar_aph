@@ -47,6 +47,7 @@
 ! 20.02.2025	ggu	completely restructured
 ! 18.03.2025	ggu	write new complementary files
 ! 12.06.2025	ggu	minor changes
+! 19.04.2026	ggu	some bug fixes, more documentation
 !
 ! notes :
 !
@@ -135,7 +136,7 @@
 	implicit none
 
 	integer nobdim
-	parameter (nobdim = 5)
+	parameter (nobdim = 5)		!FIXME
 
 	real xobs(nobdim)
 	real yobs(nobdim)
@@ -183,6 +184,7 @@
 	integer index
 	integer iexcl
 	integer nx,ny
+	integer ios
 	real dxy
 	real x0,y0,x1,y1
 	real zmin,zmax
@@ -203,6 +205,7 @@
 !--------------------------------------------------------------
 
 	call optintp_init(obsfile)
+	call success_init
 
 !-----------------------------------------------------------------
 ! set some variables
@@ -281,7 +284,7 @@
 
 	call setup_background_coords(nback,regpar,xback,yback)
 
-	call read_background_values(backfile,nback,zback)
+	!call read_background_values(backfile,nback,zback)
 
 	if( bback ) then
 	  zback = backvalue
@@ -317,8 +320,8 @@
 !-----------------------------------------------------------------
 
 	!if( bfem ) then
-	!if( .false. ) then
-	if( .true. ) then
+	if( .false. ) then
+	!if( .true. ) then
 	  iu = 3
 	  atime = 0.
 
@@ -357,7 +360,8 @@
 	end if
 
 	iuobs = 20
-	open(iuobs,file=obsfile,status='old',form='formatted')
+	open(iuobs,file=obsfile,status='old',form='formatted',iostat=ios)
+	if( ios /= 0 ) goto 88
 	if( .not. bquiet ) write(6,*) 'file with observations: ',trim(obsfile)
 
 	iufem = 21
@@ -447,7 +451,8 @@
 	    call write_fem_record(iutau,atime_old,regpar,string,np,ztau_old)
 	  end if
 	  if( bweight .and. bchanged ) then
-	    call make_weight(nobs,xobs,yobs,zobs,rlact,nback,xback,yback &
+	    call make_weight(nobs,xobs,yobs,zobs,rlact,rlmaxa &
+     &						,nback,xback,yback &
      &						,zweight)
 	    string = 'weight'
 	    call write_fem_record(iuweight,atime,regpar,string,np,zweight)
@@ -499,11 +504,13 @@
 	  write(6,*) 'final observations have changed: ',aline
 	end if
 
-	string = 'weight'
-	call write_fem_record(iuweight,atime_old,regpar,string,np &
+	if( bweight ) then
+	  string = 'weight'
+	  call write_fem_record(iuweight,atime_old,regpar,string,np &
      &						,zweight_old)
-	string = 'time scale tau [s]'
-	call write_fem_record(iutau,atime_old,regpar,string,np,ztau_old)
+	  string = 'time scale tau [s]'
+	  call write_fem_record(iutau,atime_old,regpar,string,np,ztau_old)
+	end if
 
 !-----------------------------------------------------------------
 ! final message
@@ -514,16 +521,22 @@
 	  if( irec == nrec ) then
 	    write(6,*) 'limiting records treated to: ',nrec
 	  end if
+	  write(6,*) 'final results are in file optintp.fem'
+	  if( bweight ) then
+	    write(6,*) 'other files are in opttau.fem and optweight.fem'
+	  end if
 	end if
 
-	open(1,file='success.txt',status='new',form='formatted')
-	write(1,*) 'optintp finished with success'
-	close(1)
+	call success_final
 
 !-----------------------------------------------------------------
 ! end of routine
 !-----------------------------------------------------------------
 
+	stop
+   88	continue
+	write(6,*) 'error opening file: ',trim(obsfile)
+	stop 'error stop: error opening file'
 	end
 
 !****************************************************************
@@ -558,16 +571,6 @@
 	  call printreg(regpar)
 	end if
 
-	return
-   95	continue
-	write(6,*) x0,xmin,xmax,x1
-	write(6,*) y0,ymin,ymax,y1
-	stop 'error stop setup_background: internal error (3)'
-   96	continue
-	write(6,*) 'dx,dy: ',dx,dy
-	write(6,*) 'xmin,xmax: ',xmin,xmax
-	write(6,*) 'ymin,ymax: ',ymin,ymax
-	stop 'error stop setup_background: error in parameters'
 	end
 
 !****************************************************************
@@ -734,7 +737,8 @@
 
 !****************************************************************
 
-	subroutine make_weight(nobs,xobs,yobs,zobs,rl,nback,xback,yback &
+	subroutine make_weight(nobs,xobs,yobs,zobs,rl,rlmax &
+     &					,nback,xback,yback &
      &					,zweight)
 
 	use mod_optintp, only : flag
@@ -746,6 +750,7 @@
 	real yobs(nobs)
 	real zobs(nobs)
 	real rl(nobs)
+	real rlmax(nobs)
 	integer nback
 	real xback(nback)
 	real yback(nback)
@@ -755,19 +760,22 @@
 	real xi,yi,zi,xj,yj
 	real dist2,z
 	real rl2(nobs)
+	real rlm2(nobs)
 
-	rl2 = rl**2
+	rl2 = 2.*(rl**2)
+	rlm2 = rlmax**2
 
         do j=1,nback
           xj = xback(j)
           yj = yback(j)
-	  z = 0
+	  z = 0.
           do i=1,nobs
             xi = xobs(i)
             yi = yobs(i)
             zi = zobs(i)
 	    if( zi == flag ) cycle
             dist2 = (xi-xj)**2 + (yi-yj)**2
+	    if( dist2 > rlm2(i) ) continue
             z = z + exp( -dist2/rl2(i) )
           end do
 	  z = min(1.,z)
@@ -1083,6 +1091,7 @@
 	double precision dtime
 	integer datetime(2)
 	integer date,time
+	character*80 aux_string
 
 	logical dts_is_atime
 
@@ -1095,6 +1104,8 @@
 	hlv = 10000.
 	ilhkv = 1
 	hd = flag
+	aux_string = string
+	if( string == ' ' ) aux_string = 'values'
 
 	if( dts_is_atime(atime) ) then
 	  call dts_from_abs_time(date,time,atime)
@@ -1105,7 +1116,7 @@
 	  dtime = atime
 	end if
 
-	if( .not. bquiet ) write(6,*) 'writing fem file with ',trim(string)
+	if( .not. bquiet ) write(6,*) 'writing fem file with ',trim(aux_string)
 
 	call fem_file_write_header(iformat,iu,dtime &
      &                          ,nvers,np,lmax &
@@ -1113,7 +1124,7 @@
      &                          ,nlvdi,hlv,datetime,regpar)
         call fem_file_write_data(iformat,iu &
      &                          ,nvers,np,lmax &
-     &                          ,string &
+     &                          ,aux_string &
      &                          ,ilhkv,hd &
      &                          ,nlvdi,z)
 
@@ -1205,7 +1216,8 @@
 
 	return
    99	continue
-	write(6,*) 'cannot parse line: ',trim(line)
+	write(6,*) 'cannot parse time line: ',trim(line)
+	write(6,*) 'expected: time nobs'
 	stop 'error stop parse_time_line: cannot parse'
 	end
 
@@ -1229,7 +1241,7 @@
 	real yobs(nobs)			!y-coordinate
 	real zobs(nobs)			!value of observation
 	real rra(nobs)			!error of observation
-	real rla(nobs)			!std of observation
+	real rla(nobs)			!std of background
 
 	character*80 line
 	logical bdebug
@@ -1304,23 +1316,63 @@
    91	continue
 	write(6,*) 'error reading data record: ',ianz
 	write(6,*) 'need at least 4 values on line'
+	call print_format_of_observations
 	stop 'error stop read_observations: ianz < 4'
    92	continue
 	write(6,*) 'error reading data record: ',ianz
 	write(6,*) 'line: ',trim(line)
+	call print_format_of_observations
 	stop 'error stop read_observations: cannot parse line'
    93	continue
 	write(6,*) 'error reading data record: ',i,j
+	call print_format_of_observations
 	stop 'error stop read_observations: read error in data record'
    94	continue
 	write(6,*) 'error reading data line'
+	call print_format_of_observations
 	stop 'error stop read_observations: read error in data line'
    95	continue
 	write(6,*) 'error reading header record'
+	call print_format_of_observations
 	stop 'error stop read_observations: read error in header line'
    96	continue
 	write(6,*) nobs,ndim
 	stop 'error stop read_observations: nobs>ndim'
+	end
+
+!******************************************************************
+
+	subroutine print_format_of_observations
+
+! prints format of observation file
+
+	implicit none
+
+	write(6,*) 'format of observation file:'
+	write(6,*) '  observation record 1'
+	write(6,*) '  observation record 2'
+	write(6,*) '  observation record ...'
+	write(6,*) 'format of observation record:'
+	write(6,*) '  time record'
+	write(6,*) '  data record'
+	write(6,*) 'format of time record:'
+	write(6,*) '  time nobs'
+	write(6,*) '    time is time specification'
+	write(6,*) '    nobs is number of observations'
+	write(6,*) 'format of data record:'
+	write(6,*) '  data line 1'
+	write(6,*) '  data line 2'
+	write(6,*) '  ...'
+	write(6,*) '  data line nobs'
+	write(6,*) 'format of data line:'
+	write(6,*) '  i xi yi zi [rai [rli]]'
+	write(6,*) '    i is numbering of observations [1..nobs]'
+	write(6,*) '    xi is x coordinate of observation i'
+	write(6,*) '    yi is y coordinate of observation i'
+	write(6,*) '    zi is value of observation i'
+	write(6,*) '    rai is observation error of observation i (optional)'
+	write(6,*) '    rli is std of background at i (optional)'
+
 	end
 
 !******************************************************************
@@ -1336,7 +1388,7 @@
 
 	character*(*) file
 
-	integer ns,ierr
+	integer ns,ierr,ios
 	real f(4)
 
 !-------------------------------------------------------------
@@ -1355,8 +1407,8 @@
      &		,'limit values to min/max of observations')
         call clo_add_option('rl #',flag &
      &		,'set length scale for covariance matrix')
-        call clo_add_option('drl #',flag &
-     &		,'try multiple values of rl with percentage step drl')
+!        call clo_add_option('drl #',flag &
+!     &		,'try multiple rls with percentage step drl')
         call clo_add_option('rlmax #',flag &
      &		,'maximum distance of nodes to be considered')
         call clo_add_option('rr #',flag &
@@ -1382,6 +1434,15 @@
 	call clo_add_extra('  rr=0.01  ss=100*rr')
 	call clo_add_extra('  Default for dx is 0 (use FEM grid)')
 	call clo_add_extra('Format for date is yyyy-mm-dd[::hh:MM:ss]')
+	call clo_add_extra('Format for obs-file are multiple records of')
+	call clo_add_extra('  time nobs')
+	call clo_add_extra('  1 x1 y1 z1')
+	call clo_add_extra('  2 x2 y2 z2')
+	call clo_add_extra('  ...')
+	call clo_add_extra('  nobs xnobs ynobs znobs')
+	call clo_add_extra('  where nobs is number of observations')
+	call clo_add_extra('  time is date or reltive time')
+	call clo_add_extra('  x,y are coordinates, and z is value on point')
 
 !-------------------------------------------------------------
 ! get options
@@ -1394,7 +1455,7 @@
         call clo_get_option('geo',bgeo)
         call clo_get_option('limit',blimit)
         call clo_get_option('rl',rl)
-        call clo_get_option('drl',drl)
+        !call clo_get_option('drl',drl)
         call clo_get_option('rlmax',rlmax)
         call clo_get_option('rr',rr)
         call clo_get_option('ss',ss)
@@ -1468,9 +1529,41 @@
 	bback = ( backvalue /= flag )
 	bfile = ( backfile /= ' ' )
 
+	open(1,file='success.txt',iostat=ios,status='old')
+	if( ios == 0 ) close(1,status='delete')
+
 !-------------------------------------------------------------
 ! end of routine
 !-------------------------------------------------------------
+
+	end subroutine
+
+!******************************************************************
+
+	subroutine success_init
+
+	implicit none
+
+	integer ios
+	character*80, save :: file = "success.txt"
+
+	open(unit=1, iostat=ios, file=file, status='old')
+	if (ios == 0) close(1, status='delete')
+
+	end subroutine
+
+!******************************************************************
+
+	subroutine success_final
+
+	implicit none
+
+	integer ios
+	character*80, save :: file = "success.txt"
+
+	open(1,file=file,status='new',form='formatted')
+	write(1,*) 'optintp finished with success'
+	close(1)
 
 	end subroutine
 

@@ -76,6 +76,8 @@
 ! 02.05.2023    ggu     fix mpi bug for nlv==1
 ! 09.05.2023    lrp     introduce top layer index variable
 ! 06.06.2023    ggu     minor change writing n2max
+! 05.10.2025	ggu	in gotm_internal_init() initialize only active layers
+! 10.10.2025	ggu	new parameter rilimit to limit Richardson number
 !
 !**************************************************************
 
@@ -83,16 +85,20 @@
 
 ! administers turbulence closure
 
+	use mod_info_output
+
 	implicit none
 
 	real getpar
 	logical boff
+	logical bw
 
-	integer iturb
-	save iturb
-	data iturb / 0 /
+	integer, save :: iturb = 0
 
 	if( iturb .lt. 0 ) return
+
+	bw = print_not_quiet_once()
+	call set_gotm_output(bw)
 
 	call is_offline(4,boff)
 	if( boff ) return
@@ -101,7 +107,7 @@
 	  iturb = nint(getpar('iturb'))
 	  if( iturb .le. 0 ) iturb = -1
 	  if( iturb .lt. 0 ) return
-	  write(*,*) 'starting turbulence model: iturb = ',iturb
+	  if( bw ) write(*,*) 'starting turbulence model: iturb = ',iturb
 	end if
 
 	if( iturb .eq. 1 ) then		!Gotm
@@ -128,6 +134,7 @@
 	use basin, only : nkn,nel,ngr,mbw
 	use pkonst
 	use femtime
+	use mod_info_output
 
 	implicit none
 
@@ -140,19 +147,22 @@
 	real richard(nlvdi,nkn)
 	real h(nlvdi)
 
+	double precision, parameter :: rilimit = 0	!limit for Ri number
 
 	integer k,l
 	integer nlev,flev
 	integer mode
+	integer icount
 	real ri,vis,dif
-	real diftur,vistur
+	real, save :: diftur,vistur
 	real a,b,alpha,beta
 
 	real getpar
 
-	integer icall
-	save icall
-	data icall / 0 /
+	logical bw
+	logical, save :: brilimit
+	integer, save :: icall = 0
+	real rimax
 
 !------------------------------------------------------
 ! initialization
@@ -160,8 +170,14 @@
 
 	if( icall .lt. 0 ) return
 
+	bw = print_not_quiet_once()
+
 	if( icall .eq. 0 ) then
-	  write(*,*) 'starting Munk Anderson turbulence model'
+	  if( bw ) write(*,*) 'starting Munk Anderson turbulence model'
+	  vistur = getpar('vistur')
+	  diftur = getpar('diftur')
+	  brilimit = rilimit > 0.
+	  return
 	end if
 
 	icall = icall + 1
@@ -181,8 +197,8 @@
 	b = 3.33
 	alpha = -1./2.
 	beta = -3./2.
-	vistur = getpar('vistur')
-	diftur = getpar('diftur')
+	rimax = 0.
+	icount = 0
 
 !------------------------------------------------------
 ! compute richardson number for each water column
@@ -195,6 +211,12 @@
 
 	    do l=flev,nlev-1
 	      ri = buoyf2(l,k) / shearf2(l,k)
+	      if( brilimit ) then
+	        if( ri > rilimit ) icount = icount + 1
+	        ri = max(ri,0.)			!otherwise floating point error
+	        ri = min(ri,rilimit)			!Ri too big
+	      end if
+	      rimax = max(rimax,ri)
 	      vis = vistur*(1.+a*ri)**alpha
 	      dif = diftur*(1.+b*ri)**beta
 
@@ -219,6 +241,8 @@
 
 	end do
 
+	!write(6,*) 'rimax = ',rimax,icount,(nlvdi-1)*nkn
+
 !------------------------------------------------------
 ! end of routine
 !------------------------------------------------------
@@ -238,6 +262,7 @@
 	use mod_diff_visc_fric
 	use mod_layer_thickness
 	use mod_hydro_print
+	use mod_info_output
 	use levels, only : nlvdi,nlv
 	use basin
 	use shympi
@@ -248,6 +273,7 @@
 
 	double precision dt
 	double precision u_taus,u_taub
+	double precision ri,rimax
 
 	double precision hh(0:nlvdi)
 	double precision nn(0:nlvdi), ss(0:nlvdi)
@@ -266,6 +292,7 @@
 
 	real taub(nkn)
 
+	integer icount
 	integer iunit,iudbg,kdebug,iuout,iwhat
 	integer ioutfreq,ks
 	integer k,l
@@ -282,6 +309,8 @@
 	integer nltot,iudeb
 	logical bwrite
 
+	!double precision, parameter :: rilimit = 20	!limit for Ri number
+	double precision, parameter :: rilimit = 0	!limit for Ri number
 	double precision, parameter :: dz0min = 1.1	!min value for dz0=d/z0
 	real, parameter :: charnock_val=1400.	!emp. Charnock constant
 
@@ -291,11 +320,13 @@
 	real getpar
 	integer ipext
 
+	logical bw
 	logical bwave,has_waves,bgotm,bdeb
 	save bwave
 
 	character*80 fn	
 	integer, save :: icall = 0
+	logical, save :: brilimit
 
 	integer, save	:: levdbg
 
@@ -314,6 +345,8 @@
 !------------------------------------------------------
 
 	if( icall .lt. 0 ) return
+
+	bw = print_not_quiet_once()
 
 	kdebug = 8
 	kdebug = 2100
@@ -339,11 +372,15 @@
 	  bwave = has_waves()
           levdbg = nint(getpar('levdbg'))
 
+	  brilimit = rilimit > 0.
+
 !         --------------------------------------------------------
 !         Initializes gotm arrays 
 !         --------------------------------------------------------
 
-	  write(*,*) 'starting initializing GOTM turbulence model'
+	  if( bw ) then
+	    write(*,*) 'starting initializing GOTM turbulence model'
+	  end if
 
 	  call handle_gotm_init
 
@@ -355,11 +392,17 @@
 	  iunit = 10
 	  call init_gotm_turb(iunit,fn,nlvdi)
 
-	  write(*,*) 'finished initializing GOTM turbulence model'
+	  if( bw ) then
+	    write(*,*) 'finished initializing GOTM turbulence model'
+	  end if
+
+	  call shympi_barrier
 
 	  icall = 1
-	  call shympi_barrier
+	  !return	!first time only do initialization !FIXME gotm
 	end if
+
+	icall = icall + 1
 
 	call get_timestep(dtreal)
 	dt = dtreal
@@ -406,6 +449,8 @@
 ! call gotm for each water column
 !------------------------------------------------------
 
+	icount = 0
+	rimax = 0.
 	rlmax = 0.
 	nltot = 0
 	bdeb = .false.
@@ -432,6 +477,13 @@
 	      laux = nlev - l
 	      nn(laux) = buoyf2(l,k)
 	      ss(laux) = shearf2(l,k)
+	      ri = nn(laux) / ss(laux)
+	      if( brilimit ) then
+	        rimax = max(rimax,ri)
+	        if( ri > rilimit ) icount = icount + 1
+	        if( ri > rilimit ) nn(laux) = rilimit * ss(laux)
+	        if( ri < 0. ) nn(laux) = 0.
+	      end if
 	    end do
 	    nn(0) = 0.
 	    nn(numOfLev) = 0.
@@ -616,6 +668,8 @@
 	  write(189,*) it,nlev,(difv(l,ks),l=flev,nlev)
 	end if
 
+	!write(6,*) 'rimax: ',rimax,icount
+
 !------------------------------------------------------
 ! end of routine
 !------------------------------------------------------
@@ -690,9 +744,13 @@
 
 ! initializes gotm arrays
 
+	use basin
+	use levels
 	use mod_gotm_aux
 
 	implicit none
+
+	integer k,l,lmax
 
         double precision, parameter    :: num_min  = 1.e-6
         double precision, parameter    :: nuh_min  = 1.e-6
@@ -700,11 +758,22 @@
         double precision, parameter    :: eps_min  = 1.e-12
         double precision, parameter    :: rls_min  = 1.e-10
 
-        numv_gotm = num_min
-        nuhv_gotm = nuh_min
-        tken_gotm = tken_min
-        eps_gotm  = eps_min
-        rls_gotm  = rls_min
+        numv_gotm = 0.
+        nuhv_gotm = 0.
+        tken_gotm = 0.
+        eps_gotm = 0.
+        rls_gotm = 0.
+
+	do k=1,nkn
+	  lmax = ilhkv(k)
+	  do l=0,lmax
+            numv_gotm(l,k) = num_min
+            nuhv_gotm(l,k) = nuh_min
+            tken_gotm(l,k) = tken_min
+            eps_gotm(l,k)  = eps_min
+            rls_gotm(l,k)  = rls_min
+	  end do
+	end do
 
 	end
 
@@ -718,9 +787,11 @@
 	use levels
 	use mod_gotm_aux
 	use mod_diff_visc_fric
+	use mod_info_output
 
 	implicit none
 
+	logical bw
 	logical bdebug
 	integer k,l,lmax,lmin,laux
 	integer, save :: iudbg = 0
@@ -732,9 +803,12 @@
 	if( icall > 0 ) return
 	icall = 1
 
+	bw = print_not_quiet_once()
 	bdebug = ( iudbg > 0 )
 
-	write(6,*) 'handle_gotm_init: ',rst_use_restart(8)
+	if( bw ) then
+	  write(6,*) '   handle_gotm_init: ',rst_use_restart(8)
+	end if
 
 	if( bdebug ) then
 	  write(iudbg,*) 'handle_gotm_init: ',rst_use_restart(8)
@@ -759,18 +833,6 @@
 	    difv(l,k) = nuhv_gotm(laux,k)
 	  end do
 	end do
-
-	if( bdebug ) then
-	!do k=1,nkn,200
-	!write(iudbg,*) 'init: ',k,ilhkv(k),numv_gotm(:,k)
-	!end do
-	write(iudbg,*) '----------------'
-	k=2201
-	lmax = 10
-	call dep3dnod(k,+1,lmin,lmax,h)
-	write(iudbg,*) 'init: ',k,ilhkv(k),numv_gotm(:,k)
-	write(iudbg,*) '----------------'
-	end if
 
 	end
 
@@ -1281,8 +1343,10 @@
 
 	if( icall .eq. 0 ) then
 	  call keps_init
-	  icall = 1
+	  return
 	end if
+
+	icall = icall + 1
 
 	call get_timestep(dtreal)
 	dt = dtreal

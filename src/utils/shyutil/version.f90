@@ -400,7 +400,7 @@
 ! 22.01.2025	ggu	version 8.2.3   WW3 edition
 ! 10.03.2025	ggu	version 8.2.4   bug fix edition
 ! 12.06.2025	ggu	version 8.2.5   Sankt Antonius edition
-! 15.06.2025	ggu	version 8.1.1   Sankt Antonius stable edition
+! 26.11.2025	ggu	version 8.2.6   Ebbe edition
 !
 !*****************************************************************
 
@@ -410,9 +410,9 @@
 
 ! DOCS	START	P_version
 !
-! \newcommand{\VERSION}{8.1.1}
-! \newcommand{\version}{8\_1\_1}
-! \newcommand{\COMMIT}{2025-06-15}
+! \newcommand{\VERSION}{8.2.6}
+! \newcommand{\version}{8\_2\_6}
+! \newcommand{\COMMIT}{2025-11-26}
 !
 ! DOCS	END
 
@@ -420,9 +420,9 @@
 
 	logical, save		:: bshort = .false.
 
-        character*10, parameter :: version = '8.1.1'
-        character*10, parameter :: commit  = '2025-06-15'
-        character*50, parameter :: lcommit = '2025-06-15'
+        character*10, parameter :: version = '8.2.6'
+        character*10, parameter :: commit  = '2025-11-26'
+        character*50, parameter :: lcommit = '8.2.6-develop-72'
         character*17, parameter :: text    = 'SHYFEM VERSION = '
 
         character*40, parameter :: string = text//version//'  '//commit

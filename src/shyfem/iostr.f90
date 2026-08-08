@@ -164,6 +164,7 @@
 ! 18.03.2020	ggu	admrst() substituted with rst_write_restart()
 ! 13.09.2024    lrp     iatm and coupling with atmospheric model
 ! 15.11.2024    ggu     double for energy introduced
+! 10.11.2025    ggu     new section assimil and routine read_assimil()
 !
 !************************************************************
 
@@ -174,6 +175,7 @@
 	use shympi
 	use simul
 	use befor_after
+	use mod_info_output
 
 	implicit none
 
@@ -185,7 +187,7 @@
 	real dt
 	character*20 aline
 
-	if( .not. shympi_is_master() ) return
+	if( print_not_quiet_once() ) then
 
         nrb = nkbnd()
         nbc = nbnds()
@@ -206,6 +208,8 @@
 	call get_orig_timestep(dt)
 	call get_time_iterations(niter,nits)
 
+	write(6,*)
+	write(6,*) '     Description of run time :'
 	call dts_format_abs_time(atime0+dtanf,aline)
 	write(6,*) '     start time = ',aline
 	call dts_format_abs_time(atime0+dtend,aline)
@@ -222,16 +226,18 @@
 	write(6,*) '     Description of basin :'
 	call bas_info
 
+	write(6,*)
 	write(6,*) '     Description of boundary values :'
 	write(6,*)
 	write(6,*) '     nbc,nrb     :',nbc,nrb
 
+	if( print_verbose_once() ) then
 	write(6,*)
 	write(6,*) '     Values from parameter file :'
 	write(6,*)
-
 	call pripar(6)
 	call check_parameter_values('prilog')
+	end if
 
 	call prbnds		!prints boundary info
 
@@ -256,6 +262,8 @@
 	write(6,*)
 	write(6,1030)
 	write(6,*)
+
+	end if
 
 	return
  1030   format(1x,78('='))
@@ -360,7 +368,7 @@
 !---------------------------------------------------------------
 !---------------------------------------------------------------
 
-	character*6 section,extra,last
+	character*10 section,extra,last
 	logical bdebug
 	integer nsc,num,iline
 !	integer nrdsec,nrdveci,nrdvecr
@@ -414,6 +422,8 @@
 			call nrdins(section)
 		else if(section.eq.'bound') then
 			call rdbnds(num)
+		else if(section.eq.'assimil') then
+			call read_assimil(num)
 		else if(section.eq.'float') then
 			!call rdfloa(nfldin)
 			call section_deleted(section,'use section $lagrg')
@@ -451,6 +461,7 @@
                 else if(section.eq.'connec')then       !connectivity
                         call nrdins(section)	
 		else					!try modules
+			goto 97
 			call modules(M_READ)
 			if( .not. hasreadsec() ) then	!sec has been handled?
 				goto 97			! -> no
@@ -727,9 +738,11 @@
 !**********************************************************************
 !**********************************************************************
 
-        subroutine getinfo(iunit)
+        subroutine getinfo_0(iunit)
 
-! gets unit of info file
+! gets unit of info filea 
+!
+! routine transferred to info_output.f90 in shyutilmpi
 
         implicit none
 
@@ -758,6 +771,7 @@
 	subroutine setup_omp_parallel
 
 	use shympi
+	use mod_info_output
 
 	implicit none
 
@@ -778,7 +792,7 @@
 	call openmp_set_num_threads(nomp)
 	call putpar('nomp',float(nomp))
 
-	if( .not. shympi_is_master() ) return
+	if( print_not_quiet_once() ) then
 
 	write(6,*) 'start of setup of parallel OMP threads'
 
@@ -791,6 +805,8 @@
 	write(6,*) 'maximum available OMP threads: ',n
 	write(6,*) 'for simulation used OMP threads: ',nomp
 	write(6,*) 'end of setup of parallel OMP threads'
+
+	end if
 
 	end
 

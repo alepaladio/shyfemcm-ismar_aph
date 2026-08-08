@@ -31,6 +31,7 @@
 !
 ! 01.12.2024    ggu     written from scratch
 ! 03.12.2024    ggu     allow for optional format
+! 05.11.2025    ggu     routine getinfo() transferred here from iostr.f90
 !
 !--------------------------------------------------------------------------
 
@@ -42,8 +43,8 @@
 
 	private
 
-        logical, parameter :: binfo_do = .true.	!enables info output
-        !logical, parameter :: binfo_do = .false.	!enables info output
+        logical, parameter :: binfo_do = .true.		!enables info output
+        !logical, parameter :: binfo_do = .false.	!disables info output
 
         logical, parameter :: binfo = binfo_do		!accessible outside
         logical, save :: binfo_init = .false.		!has been initialized?
@@ -56,6 +57,11 @@
 
 	public :: binfo
 	public :: info_output
+
+	public :: print_verbose , print_verbose_once , print_regular &
+     &			, print_not_quiet , print_not_quiet_once &
+     &			, print_quiet , print_silent
+	public :: is_quiet , is_silent
 
 !================================================================
         contains
@@ -138,7 +144,174 @@
 
 	end subroutine info_output_array
 
+!**********************************************************************
+!**********************************************************************
+!**********************************************************************
+
+	function print_verbose()
+
+	use mod_shyfem
+	use shympi
+
+	implicit none
+
+	logical print_verbose
+
+	print_verbose = bverbose
+
+	end function print_verbose
+	
+!**********************************************************************
+
+	function print_verbose_once()
+
+	use mod_shyfem
+	use shympi
+
+	implicit none
+
+	logical print_verbose_once
+
+	print_verbose_once = bverbose .and. my_id == 0
+
+	end function print_verbose_once
+	
+!**********************************************************************
+
+	function print_regular()
+
+	use mod_shyfem
+	use shympi
+
+	implicit none
+
+	logical print_regular
+
+	print_regular = .not. bquiet .and. .not. bverbose .and. my_id == 0
+
+	end function print_regular
+	
+!**********************************************************************
+
+	function print_not_quiet_once()
+
+	use mod_shyfem
+	use shympi
+
+	implicit none
+
+	logical print_not_quiet_once
+
+	print_not_quiet_once = .not. bquiet .and. my_id == 0
+
+	end function print_not_quiet_once
+	
+!**********************************************************************
+
+	function print_not_quiet()
+
+	use mod_shyfem
+	use shympi
+
+	implicit none
+
+	logical print_not_quiet
+
+	print_not_quiet = print_regular() .or. print_verbose()
+
+	end function print_not_quiet
+	
+!**********************************************************************
+
+	function print_quiet()
+
+	use mod_shyfem
+	use shympi
+
+	implicit none
+
+	logical print_quiet
+
+	print_quiet = .not. bsilent .and. my_id == 0
+
+	end function print_quiet
+	
+!**********************************************************************
+
+	function print_silent()
+
+	use mod_shyfem
+	use shympi
+
+	implicit none
+
+	logical print_silent
+
+	print_silent = bsilent .and. my_id == 0
+
+	end function print_silent
+	
+!**********************************************************************
+
+	function is_silent()
+
+	use mod_shyfem
+	use shympi
+
+	implicit none
+
+	logical is_silent
+
+	is_silent = bsilent
+
+	end function is_silent
+	
+!**********************************************************************
+
+	function is_quiet()
+
+	use mod_shyfem
+	use shympi
+
+	implicit none
+
+	logical is_quiet
+
+	is_quiet = bquiet
+
+	end function is_quiet
+	
+!**********************************************************************
+
 !================================================================
         end module mod_info_output
 !================================================================
+
+        subroutine getinfo(iunit)
+
+! gets unit of info file
+
+        implicit none
+
+        integer iunit
+
+        integer ifemop
+
+        integer, save :: iu = 0
+
+        if( iu .le. 0 ) then
+          iu = ifemop('.inf','formatted','new')
+          if( iu .le. 0 ) then
+            write(6,*) 'error in opening info file'
+            stop 'error stop getinfo'
+          end if
+        end if
+
+        iunit = iu
+
+        end
+
+!**********************************************************************
+!**********************************************************************
+!**********************************************************************
 

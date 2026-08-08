@@ -62,7 +62,7 @@ LIBL    += $(LIB_NETCDF)
 
 EXES = shyelab extelab flxelab lgrelab tselab femelab shyproj shyfile \
 	shystrings femcombine dbg_flx dbg_box \
-	femadd femdate
+	femadd femintp femdate list_strings
 
 MAKEDEPEND = $(FEMBIN)/mkdp.pl
 
@@ -87,6 +87,7 @@ OBJ := \
 	shyelab_nodes.o \
 	shyelab_proj.o \
 	shyelab_extract.o \
+	femutil.o \
 	shyelab1.o \
 	extelab1.o \
 	flxelab1.o \
@@ -94,6 +95,7 @@ OBJ := \
 	femelab1.o \
 	lgrelab1.o \
 	shy_util2.o \
+	femelab_cover.o \
 
 #----------------------------------------------------------------------------
 
@@ -142,8 +144,14 @@ dbg_box: $(LIBF) dbg_box.o
 femadd: $(OBJ) $(LIBF) femadd.o
 	$(F77) $(FFLAGS) $(INCLUDE) $(LFLAGS) $(OBJ) $@.o $(LIBL) -o $@
 
+femintp: $(OBJ) $(LIBF) femintp.o
+	$(F77) $(FFLAGS) $(INCLUDE) $(LFLAGS) $(OBJ) $@.o $(LIBL) -o $@
+
 femdate: $(OBJ) $(LIBF) femdate.o
 	$(F77) $(FFLAGS) $(INCLUDE) $(LFLAGS) $(OBJ) $@.o $(LIBL) -o $@
+
+list_strings: $(LIBF) list_strings.o
+	$(F77) $(FFLAGS) $(INCLUDE) $(LFLAGS) $@.o $(LIBL) -o $@
 
 #----------------------------------------------------------------------------
 
@@ -230,6 +238,9 @@ femelab2.o: ../../../lib/mod/clo.mod ../../../lib/mod/elabtime.mod \
 		../../../lib/mod/elabutil.mod \
 		../../../lib/mod/fem_util.mod \
 		../../../lib/mod/shyfem_strings.mod 
+femelab_cover.o: ../../../lib/mod/basin.mod \
+		../../../lib/mod/elabutil.mod 
+femintp.o: ../../../lib/mod/clo.mod ../../../lib/mod/fem_util.mod
 flxelab1.o: ../../../lib/mod/basin.mod ../../../lib/mod/clo.mod \
 		../../../lib/mod/elabtime.mod \
 		../../../lib/mod/elabutil.mod \
@@ -248,6 +259,11 @@ lgrelab1.o: ../../../lib/mod/basin.mod ../../../lib/mod/clo.mod \
 		../../../lib/mod/shyfile.mod \
 		../../../lib/mod/shympi.mod \
 		../../../lib/mod/shyutil.mod 
+shy_util2.o: ../../../lib/mod/clo.mod \
+		../../../lib/mod/elabtime.mod \
+		../../../lib/mod/elabutil.mod \
+		../../../lib/mod/shyfile.mod \
+		../../../lib/mod/shyutil.mod 
 shyelab.o: ../../../lib/mod/clo.mod ../../../lib/mod/elabutil.mod \
 		../../../lib/mod/shyfile.mod 
 shyelab1.o: ../../../lib/mod/basin.mod ../../../lib/mod/clo.mod \
@@ -257,6 +273,7 @@ shyelab1.o: ../../../lib/mod/basin.mod ../../../lib/mod/clo.mod \
 		../../../lib/mod/evgeom.mod \
 		../../../lib/mod/levels.mod \
 		../../../lib/mod/mod_depth.mod \
+		../../../lib/mod/mod_trace_point.mod \
 		../../../lib/mod/shy_extract.mod \
 		../../../lib/mod/shyfile.mod \
 		../../../lib/mod/shympi.mod \
@@ -272,6 +289,7 @@ shyelab_nodes.o: ../../../lib/mod/basin.mod \
 shyelab_output.o: ../../../lib/mod/basin.mod \
 		../../../lib/mod/elabtime.mod \
 		../../../lib/mod/elabutil.mod \
+		../../../lib/mod/iso8601.mod \
 		../../../lib/mod/levels.mod \
 		../../../lib/mod/mod_offline.mod \
 		../../../lib/mod/shyfem_strings.mod \

@@ -36,6 +36,9 @@
 ! 02.12.2011    ggu     bug fix in intpdep() and reduce()
 ! 02.12.2011    ggu     use depth also for smoothing (change in distxy())
 ! 27.05.2012    ggu     renamed ndim to nsdim in smooth()
+! 12.01.2026    ggu     large arrays transformed to allocatable
+! 12.02.2026    ggu     new routine despike, bug fix for retriv
+! 01.08.2026    ggu     new routine reduce_points_strait(), not finished
 !
 ! description :
 !
@@ -43,7 +46,7 @@
 !
 ! The program ask for the GRD file that contains the lines
 ! It also asks for the smoothing parameter (sigma) and reduction
-!	parameter (reduct)
+!	parameter (reduce)
 ! The units of these values must be in the units of the line coordinates.
 ! 
 ! Smoothing:
@@ -57,8 +60,8 @@
 !
 ! Reduction:
 !
-! The program uses the parameter reduct to decide if a point should
-! be kept or not. If reduct=100, than all points closer than 100 m
+! The program uses the parameter reduce to decide if a point should
+! be kept or not. If reduce=100, than all points closer than 100 m
 ! to the reference point are discarded. At the end a line is left with
 ! a distance between the points of minimum 100 m.
 !
@@ -68,7 +71,7 @@
 ! smoothing and reduction is working as described above. If, however,
 ! depth values do exists, then they are used to change the resolution
 ! of the line points. For a value of 2, twice the points in the reduction
-! algorithm are retained. In other words, the value for reduct is changed
+! algorithm are retained. In other words, the value for reduce is changed
 ! locally to a value of 100/2=50, and only points closer as 50 are
 ! eliminated. Line points without depth receive an implicit value of 1.
 ! The value -1 indicates that this point should never be eliminated 
@@ -86,6 +89,8 @@
 ! smoothing program
 !
 ! same as gridf but smooth on length of line, not points
+!
+! lines should not intersect or touch
 
 	use basin
 	use grd
@@ -100,6 +105,8 @@
 
 	logical bperiod
 	integer nt,nll
+	integer i
+	real hl
 
 	real, allocatable :: xt(:)
 	real, allocatable :: yt(:)
@@ -109,46 +116,48 @@
 	integer nline
 	integer nnode
 	real sigma
-	real reduct
+	real reduce
+	real deflect
+	real rspike
 
 	call shyfem_copyright('gridr - smoothing of lines')
 
 !-----------------------------------
 ! sigma		smoothing parameter (size of gaussian kernel)
-! reduct	reduction of points in line (in meters)
+! reduce	reduction of points in line (in meters)
 !-----------------------------------
 	sigma = 2.0
 	sigma = 1.5
 	sigma = 500.
 	sigma = 200.
-	reduct = 4.0
-	reduct = 200.
+	reduce = 4.0
+	reduce = 200.
 !----------------------------------- hakata
 	sigma = 200.
-	reduct = 200.
+	reduce = 200.
 !----------------------------------- circle
 	sigma = 0.0
-	reduct = 0.1
+	reduce = 0.1
 !----------------------------------- lido
 	sigma = 0.
-	reduct = 100.
+	reduce = 100.
 !----------------------------------- curonian lagoon
 	sigma = 200.
-	reduct = 200.
+	reduce = 200.
 !----------------------------------- brasile
 	sigma = 0.005
-	reduct = 0.005
+	reduce = 0.005
 !----------------------------------- malta
 	sigma = 0.1
-	reduct = 0.2
+	reduce = 0.2
 	sigma = 0.1 * 245.
-	reduct = 0.2 * 245.
+	reduce = 0.2 * 245.
 !----------------------------------- hue
 	sigma = 30.
-	reduct = 300.
+	reduce = 300.
 !-----------------------------------
 
-	call handle_command_line(file,sigma,reduct)
+	call handle_command_line(file,sigma,reduce,deflect,rspike)
 
 !------------------------------------------------------
 
@@ -163,10 +172,13 @@
 
         call grd_to_basin
 	call mod_depth_init(nkn,nel)
+	call grd_get_nodal_depth(hkv)
 
-	write(6,*) 'nodes    : ',nk
-	write(6,*) 'elements : ',ne
-	write(6,*) 'lines    : ',nl
+	write(6,*) 'nodes             : ',nk
+	write(6,*) 'elements          : ',ne
+	write(6,*) 'lines             : ',nl
+	write(6,*) 'nodes in elements : ',nne
+	write(6,*) 'nodes in lines    : ',nnl
 
 	allocate(xt(nnl),yt(nnl),ht(nnl))
 
@@ -174,26 +186,33 @@
 
 	open(99,file='smooth.grd',status='unknown',form='formatted')
 	open(98,file='reduce.grd',status='unknown',form='formatted')
+	open(97,file='despike.grd',status='unknown',form='formatted')
 
 	do l=1,nl
 	  nll = nnl
-	  nline = ipplv(l)
+	  nline = ipplv(l)	!number of line
+	  hl = hhlv(l)		!depth of line
 	  call extrli(l,nl,ipplv,ialv,ipntlv,inodlv,xgv,ygv,hkv &
      &				,xt,yt,ht,nll,nt)
 	  call mkperiod(xt,yt,nll,bperiod)
+	  call mkstats(nl,nll,xt,yt,ht,bperiod)
 	  call intpdep(nline,ht,nll,bperiod)
 	  call smooth(sigma,xt,yt,ht,nll,bperiod)
 	  call wrline(99,nline,nnode,nll,xt,yt,ht,nt,bperiod)
-	  call reduce(reduct,xt,yt,ht,nll)
+	  call reduce_points(reduce,xt,yt,ht,nll)
+	  call reduce_points_strait(deflect,xt,yt,ht,nll,hl)
 	  call wrline(98,nline,nnode,nll,xt,yt,ht,nt,bperiod)
+	  call despike(rspike,xt,yt,ht,nll)
+	  call wrline(97,nline,nnode,nll,xt,yt,ht,nt,bperiod)
 	end do
 
 	write(6,*) 'routine finished...'
 
 	close(99)
 	close(98)
+	close(97)
 
-	write(6,*) 'files smooth.grd and reduce.grd written'
+	write(6,*) 'files smooth.grd, reduce.grd, and despike.grd written'
 
 	end
 
@@ -208,17 +227,17 @@
 
 	integer l		!actual line
 	integer nli		!total number of lines
-	integer iplv(1)
-	integer ialrv(1)
-	integer ipntlv(0:1)
-	integer inodlv(1)
-	real xgv(1)
-	real ygv(1)
-	real hkv(1)
+	integer iplv(nli)	!line number
+	integer ialrv(nli)	!type of line
+	integer ipntlv(0:nli)	!node index
+	integer inodlv(nl)	
+	real xgv(*)
+	real ygv(*)
+	real hkv(*)
+	real xt(nl)
+	real yt(nl)
+	real ht(nl)
 	integer nl		!on entry dim, on return number of nodes in line
-	real xt(1)
-	real yt(1)
-	real ht(1)
 	integer nt		!type of line
 
 	integer nvert,i,ibase
@@ -232,20 +251,25 @@
 	ibase = ipntlv(l-1)
 
 	if( nvert .gt. nl ) goto 98
+	nt = ialrv(l)
 
-	write(6,*) 'extracting line ',l,iplv(l),nvert,nt
+	!write(6,*) 'extracting line ',l,iplv(l),nvert,nt
 
 	do i=1,nvert
 	    node = inodlv(ibase+i)
-	    ier = retriv(node,k)
-	    if( ier .lt. 0 ) goto 99
+	    !ier = retriv(node,k)
+	    k = node
+	    !if( ier .lt. 0 ) goto 99
+	    !if( ier .eq. 0 ) then
+	    !  write(6,*) 'node not found: ',node
+	!	stop
+	!    end if
 	    xt(i) = xgv(k)
 	    yt(i) = ygv(k)
 	    ht(i) = hkv(k)
 	end do
 
 	nl = nvert
-	nt = ialrv(l)
 
 	return
    98	continue
@@ -307,7 +331,8 @@
 	  write(6,*) 'line : ',l,iplv(l),ialrv(l),nvert
 	  do i=1,nvert
 	    node = inodlv(ibase+i)
-	    ier = retriv(node,k)
+	    !ier = retriv(node,k)
+	    k = node
 	    if( ier .lt. 0 ) goto 99
 	    write(6,*) i,node,xgv(k),ygv(k)
 	  end do
@@ -352,7 +377,7 @@
 	implicit none
 
 	integer nkn
-	integer ipv(1)
+	integer ipv(nkn)
 
 	integer k,ier
 	integer insert
@@ -388,9 +413,9 @@
 	real dxy(-ndim:2*ndim)
 
 	integer i
-	real xo,yo,xn,yn
-	real dx,dy,dist
-	real ho,hn,h
+	double precision xo,yo,xn,yn
+	double precision dx,dy,dist
+	double precision ho,hn,h
 
 	xn = xt(nl)
 	yn = yt(nl)
@@ -442,16 +467,22 @@
 	integer ngk
 	real dist,dx,dy,distot
 	real gk(-nsdim:nsdim)
-	real raux(-nsdim:2*nsdim)
-	real dxy(-nsdim:2*nsdim)
+	real, allocatable :: raux(:)
+	real, allocatable :: dxy(:)
+	real, allocatable :: htt(:)
 
 	if( nl .gt. nsdim ) goto 99
 
         if( sigma .le. 0. ) return
 
+	allocate(raux(-nl:2*nl))
+	allocate(dxy(-nl:2*nl))
+	allocate(htt(nl))
+
 ! set up dxy
 
-	call distxy(nsdim,nl,xt,yt,ht,dxy)
+	htt = 0.
+	call distxy(nsdim,nl,xt,yt,htt,dxy)
 
 	distot = 0.
 	do i=1,nl-1
@@ -696,13 +727,99 @@
 
 !********************************************************
 
-	  subroutine reduce(reduct,xt,yt,ht,nl)
+	subroutine despike(ratio,xt,yt,ht,nl)
 
 ! reduces points in line
 
 	implicit none
 
-	real reduct
+	real ratio
+	real xt(nl)
+	real yt(nl)
+	real ht(nl)
+	integer nl
+
+	integer i,nnew,ispike
+	real dist1,dist2,dist3
+	real dx1,dy1,dx2,dy2,dx3,dy3
+	real h,hmin,hmax
+	real, parameter :: flag = -999.
+
+! very simplicistic approach
+
+	if( ratio <= 0 ) return
+
+	hmin = minval(ht)
+	hmax = maxval(ht)
+	write(6,*) 'despike: hmin,hmax: ',nl,hmin,hmax
+
+	do i=2,nl-1
+	  dx1 = xt(i) - xt(i-1)
+	  dy1 = yt(i) - yt(i-1)
+	  dx2 = xt(i+1) - xt(i)
+	  dy2 = yt(i+1) - yt(i)
+	  dx3 = xt(i+1) - xt(i-1)
+	  dy3 = yt(i+1) - yt(i-1)
+	  dist1 = sqrt( dx1*dx1 + dy1*dy1 )
+	  dist2 = sqrt( dx2*dx2 + dy2*dy2 )
+	  dist3 = sqrt( dx3*dx3 + dy3*dy3 )
+	  if( (dist1+dist2)/dist3 > ratio ) then
+	    ht(i) = flag
+	    write(6,*) i,dist1+dist2,dist3,(dist1+dist2)/dist3
+	  end if
+	end do
+
+	ispike = count( ht == flag )
+	write(6,*) ispike,' spikes found'
+
+	nnew = 0
+	do i=1,nl
+	  if( ht(i) /= flag ) then
+	    nnew = nnew + 1
+	    xt(nnew) = xt(i)
+	    yt(nnew) = yt(i)
+	    ht(nnew) = ht(i)
+	  end if
+	end do
+
+	call eliminate_non_unique(nnew,xt,yt)
+
+!	if( nnew .lt. 3 ) stop 'error stop reduce: line too short...'
+	if( nnew .lt. 3 ) then
+	  write(6,*) 'line too short -> eliminated'
+	  nnew = 0
+	end if
+
+	write(6,*) 'despike: from ',nl,'  to ',nnew,'  nodes'
+	nl = nnew
+
+	end
+
+!********************************************************
+
+	subroutine eliminate_non_unique(n,xt,yt)
+
+	implicit none
+
+	integer n
+	real xt(n)
+	real yt(n)
+
+	if( xt(1) == xt(n) .and. yt(1) == yt(n) ) then
+	  n = n - 1
+	end if
+	
+	end
+
+!********************************************************
+
+	subroutine reduce_points(reduce,xt,yt,ht,nl)
+
+! reduces points in line
+
+	implicit none
+
+	real reduce
 	real xt(nl)
 	real yt(nl)
 	real ht(nl)
@@ -711,13 +828,17 @@
 	integer i,nnew
 	real rr,rtot
 	real dist,dx,dy
-	real h
+	real h,hmin,hmax
 
 ! very simplicistic approach
 
-	if( reduct <= 0 ) return
+	if( reduce <= 0 ) return
 
-	rr = reduct
+	hmin = minval(ht)
+	hmax = maxval(ht)
+	write(6,*) 'hmin,hmax: ',hmin,hmax
+
+	rr = reduce
 	rtot = 1.
 
 	if( nl .lt. 3 * rr ) then
@@ -737,10 +858,10 @@
 	  dy = yt(i) - yt(i-1)
 	  h = ht(i)
 	  dist = sqrt( dx*dx + dy*dy )
-	  !write(6,*) dist,h,dist/h,rtot,reduct
-	  if( h .gt. 0. ) dist = dist * h
+	  !write(6,*) dist,h,dist/h,rtot,reduce
+	  !if( h .gt. 0. ) dist = dist * h
 	  rtot = rtot + dist
-	  if( rtot .gt. reduct .or. h .lt. 0. ) then
+	  if( rtot .gt. reduce .or. h .lt. 0. ) then
 	    nnew = nnew + 1
 	    xt(nnew) = xt(i)
 	    yt(nnew) = yt(i)
@@ -749,14 +870,118 @@
 	  end if
 	end do
 
+	call eliminate_non_unique(nnew,xt,yt)
+
 !	if( nnew .lt. 3 ) stop 'error stop reduce: line too short...'
 	if( nnew .lt. 3 ) then
 	  write(6,*) 'line too short -> eliminated'
 	  nnew = 0
 	end if
 
-	write(6,*) 'reduce: new nodes = ',nnew
+	write(6,*) 'reduce: from ',nl,'  to ',nnew,'  nodes'
 	nl = nnew
+
+	end
+
+!********************************************************
+
+	subroutine reduce_points_strait(deflect,xt,yt,ht,nl,hl)
+
+	implicit none
+
+	real deflect	!maximum deflection allowed
+	real xt(nl)
+	real yt(nl)
+	real ht(nl)	!not used
+	integer nl	!number of points in line
+	real hl		!depth of line -> resolution required
+
+	integer i,j,nd,ndef,nelim,ntot,nnew
+	integer ib,ia,ic,ibb,iaa
+	real dx,dy,dd
+
+	integer, allocatable :: neibor(:,:)
+	logical, allocatable :: active(:)
+	real, allocatable :: ang(:)
+	real, allocatable :: dist(:)
+
+	real angle
+
+	allocate( neibor(2,nl) )
+	allocate( active(nl) )
+	allocate( ang(nl) )
+	allocate( dist(nl) )
+
+	neibor = 0
+	active = .true.
+	ang = 0
+	dist = 0
+
+	neibor(2,1) = 2
+
+	do i=2,nl-1
+	  neibor(1,i) = i-1
+	  neibor(2,i) = i+1
+	  ang(i) = angle(xt(i-1),yt(i-1),xt(i),yt(i),xt(i+1),yt(i+1))
+	  ang(i) = abs( ang(i) - 180. )
+	  dx = xt(i+1) - xt(i-1)
+	  dy = yt(i+1) - yt(i-1)
+	  dist(i) = sqrt( dx*dx + dy*dy )
+	end do
+	
+	neibor(1,nl) = nl-1
+
+	nd = count( ang < deflect )
+	write(6,*) 'line: ',nl,deflect,hl,nd
+
+	ndef = 10
+	ntot = 0
+	do j=1,ndef
+	  dd = j*deflect/ndef	!start from small and then go up
+	  nelim = 0
+	  do i=2,nl-1
+	    if( ang(i) >= dd ) cycle
+	    if( dist(i) >= 2.*hl ) cycle
+	    ! now we eliminate this point
+	    active(i) = .false.
+	    ang(i) = 360.
+	    ib = neibor(1,i)
+	    ia = neibor(2,i)
+	    neibor(1,ia) = ib
+	    neibor(2,ib) = ia
+	    neibor(:,i) = 0
+	    ic = ib
+	    ibb = neibor(1,ic)
+	    iaa = neibor(2,ic)
+	    dx = xt(iaa) - xt(ibb)
+	    dy = yt(iaa) - yt(ibb)
+	    dist(ic) = sqrt( dx*dx + dy*dy )
+	    ang(ic) = angle(xt(ibb),yt(ibb),xt(ic),yt(ic),xt(iaa),yt(iaa))
+	    ang(ic) = abs( ang(ic) - 180. )
+	    ic = ia
+	    ibb = neibor(1,ic)
+	    iaa = neibor(2,ic)
+	    dx = xt(iaa) - xt(ibb)
+	    dy = yt(iaa) - yt(ibb)
+	    dist(ic) = sqrt( dx*dx + dy*dy )
+	    ang(ic) = angle(xt(ibb),yt(ibb),xt(ic),yt(ic),xt(iaa),yt(iaa))
+	    ang(ic) = abs( ang(ic) - 180. )
+	    nelim = nelim + 1
+	  end do
+	  ntot = ntot + nelim
+	  !write(6,*) 'eliminated: ',dd,nelim
+	end do
+
+	nnew = 0
+	do i=1,nl
+	  if( .not. active(i) ) cycle
+	  nnew = nnew + 1
+	  xt(nnew) = xt(i)
+	  yt(nnew) = yt(i)
+	  ht(nnew) = ht(i)
+	end do
+	nl = nnew
+	write(6,*) 'total nodes in line/eliminated: ',nl,ntot
 
 	end
 
@@ -905,7 +1130,49 @@
 
 !********************************************************
 
-	subroutine handle_command_line(file,sigma,reduct)
+	subroutine mkstats(nl,nll,xt,yt,ht,bperiod)
+
+	implicit none
+
+	integer nl
+	integer nll
+	real xt(nll)
+	real yt(nll)
+	real ht(nll)
+	logical bperiod
+
+	integer i,ndim
+	real dmin,dmax,dmed,d
+	real, allocatable :: dxy(:)
+	real, allocatable :: htt(:)
+
+	ndim = nll
+	allocate(dxy(-ndim:2*ndim))
+	allocate(htt(ndim))
+
+	htt = 0
+	call distxy(ndim,nll,xt,yt,htt,dxy)
+
+	dmin = 1.e+10
+	dmax = 0.
+	dmed = 0.
+
+	do i=1,nll
+	  d = dxy(i)
+	!write(6,*) xt(i),yt(i),dxy(i)
+	  dmin = min(dmin,d)
+	  dmax = max(dmax,d)
+	  dmed = dmed + d
+	end do
+	dmed = dmed / nll
+
+	!write(6,*) 'mkstats: ',nll,dmin,dmax,dmed
+
+	end
+
+!********************************************************
+
+	subroutine handle_command_line(file,sigma,reduce,deflect,rspike)
 
 	use clo
 
@@ -913,29 +1180,39 @@
 
 	character*(*) file
 	real sigma
-	real reduct
+	real reduce
+	real deflect
+	real rspike
 
 	integer nfile
 
         call clo_init('smooth','grd-file','1.0')
 
         call clo_add_info('smoothes line and reduces points')
-        call clo_add_option('sigma',0. &
-     &                    ,'standard deviation for smoothing')
-        call clo_add_option('reduct',0. &
-     &                    ,'reduction of points with smaller distance')
+        call clo_add_option('sigma sigma',0. &
+     &                    ,'standard deviation for smoothing is sigma')
+        call clo_add_option('reduce dmin',0. &
+     &                    ,'elimination of points with distance < dmin')
+        call clo_add_option('deflect angle',0. &
+     &                    ,'elimination of points with ang < angle')
+        call clo_add_option('despike rspike',0. &
+     &                    ,'elimination of points with spike ratio > rspike')
 
         call clo_parse_options(1)       !expecting 1 file
 
         call clo_get_option('sigma',sigma)
-        call clo_get_option('reduct',reduct)
+        call clo_get_option('reduce',reduce)
+        call clo_get_option('deflect',deflect)
+        call clo_get_option('despike',rspike)
 
         nfile = clo_number_of_files()
         if( nfile > 0 ) call clo_get_file(1,file)
 
 	write(6,*) 'file name: ',trim(file)
 	write(6,*) 'sigma: ',sigma
-	write(6,*) 'reduct: ',reduct
+	write(6,*) 'reduce: ',reduce
+	write(6,*) 'deflect: ',deflect
+	write(6,*) 'rspike: ',rspike
 
 	end
 

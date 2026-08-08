@@ -71,6 +71,8 @@
 ! 30.11.2022	ggu	if facts or offset given set output
 ! 30.11.2022	ggu	rain_elab() revised
 ! 23.04.2024	ggu	conversion routines for wind implemented
+! 10.10.2024	ggu	new smooth option for fem files implemented
+! 09.01.2026	ggu	new code for cover option
 !
 !******************************************************************
 
@@ -236,6 +238,8 @@
 	boutput = boutput .or. bexpand
 	boutput = boutput .or. bresample
 	boutput = boutput .or. bconvwindxy .or. bconvwindsd
+	boutput = boutput .or. bsmooth
+	boutput = boutput .or. bcover
 	if( bextract ) boutput = .false.
 
 	bwind_convert = bconvwindxy .or. bconvwindsd
@@ -499,6 +503,19 @@
 	        data(:,:,iv) = data(:,:,iv) + foff
 	      end where
 	    end if
+	    if( bsmooth ) then
+	      if( .not. breg ) then
+		write(6,*) 'smoothing only for regular file'
+		stop 'error stop femelab: not a regular file'
+	      end if
+	      nx = nint(regpar(1))
+	      ny = nint(regpar(2))
+	      flag = regpar(7)
+	      if( bverbose ) then
+	        write(6,'(a,4i4,f10.2)') 'smoothing: ',nlvdi,nx,ny,sloop,salpha
+	      end if
+              call smooth_regular(nlvdi,nx,ny,data,flag,salpha,sloop)
+	    end if
 	  end do
 
 	  if( bwind_convert ) then
@@ -556,6 +573,13 @@
 	    !write(6,*) iv,'  ',trim(string)
             if( boutput ) then
 	      !call custom_elab(nlvdi,np,string,iv,flag,data(1,1,iv))
+	      if( bcover ) then
+		if( .not. breg ) then
+	          stop 'error stop: for cover grid must be regular'
+		end if
+		call handle_cover_basin(coverfile &
+     &			,nlvdi,np,llmax(iv),ilhkv,regpar,data(1,1,iv))
+	      end if
 	      if( breg .and. bexpand .and. .not. bresample ) then
 		call reg_set_flag(nlvdi,np,ilhkv,regpar,data(1,1,iv))
 		call reg_expand_shell(nlvdi,np,llmax(iv),regexpand &
@@ -1659,7 +1683,8 @@
 
 	if( newstring == ' ' ) return
 
-	write(6,*) 'using string: ',trim(newstring)
+	!write(6,*) 'using string: ',trim(newstring)
+
 	ia = 1
 	ics = 0
 	do

@@ -54,6 +54,9 @@
 ! 28.01.2020	ggu	changes for vorticity
 ! 28.04.2023    ggu     update function calls for belem
 ! 03.10.2024    ggu     added var_dim
+! 01.10.2025    ggu     handle ncdate0
+! 03.10.2025    ggu     handle sumvar with specific vars, use 78 for sumvar
+! 08.10.2025    ggu     bug fix for ncdate0
 !
 !***************************************************************
 !
@@ -118,6 +121,7 @@
 	use shyelab_out
 	use shyfile
         use mod_offline
+	use iso8601
 
 	implicit none
 
@@ -131,7 +135,7 @@
 	integer ftype_out
 	logical bshy
 	character*60 file,form
-	character*80 string,title
+	character*80 string,title,saux
 	integer ifileo
 
 	idout = 0
@@ -209,6 +213,11 @@
 	  else if( outformat == 'nc' ) then
 	    call shy_get_title(id,title)
 	    call nc_set_quiet(bquiet)
+	    if( ncdate0 /= ' ' ) then
+	      call complete_date(ncdate0,saux,ierr)
+	      if( ierr /= 0 ) goto 71
+	      call nc_set_ref_date(saux)
+	    end if
 	    call nc_output_set_vars(breg,nxreg,nyreg,hcoord,fmreg,xlon,ylat)
 	    call nc_output_init(ncid,title,nvar,ivars,b2d,sncglobal)
 	    idout = ncid
@@ -224,6 +233,9 @@
 	end if
 
 	return
+   71	continue
+        write(6,*) 'error parsing ncdate0: ',trim(ncdate0)
+        stop 'error stop shyelab_init_output: ncdate0'
    74	continue
         write(6,*) 'error opening file ',trim(file)
         stop 'error stop shyelab_init_output: opening file'
@@ -321,7 +333,7 @@
 	integer np
 	integer id_out
 	integer ftype
-	logical bscalar,bhydro,bshy
+	logical bscalar,bhydro,bshy,bselem
 	character*60 string
 
 	if( .not. boutput ) return
@@ -330,6 +342,7 @@
 	call shy_get_ftype(id,ftype)
         bhydro = ftype == 1
         bscalar = ftype == 2
+        bselem = ftype == 4
 	bshy = ( outformat == 'shy' .or. outformat == 'native' )
 
 	if( bhydro .and. .not. bshy ) return
@@ -485,9 +498,8 @@
 	    if( bhydro ) then
 	      ! nothing to be done
 	    else if( bsumvar ) then
-              cv3all(:,:,0) = 0.
-              cv3all(:,:,0) = sum(cv3all,dim=3)
-              ivar = 10
+	      call handle_sumvar(nlvddi,nndim,nvar,cv3all)
+              ivar = 78
 	      belem = .false.
 	      call shy_write_output_record(idout,dtime,ivar &
      &					,belem,n,m &
@@ -644,6 +656,32 @@
 !***************************************************************
 !***************************************************************
 
+	subroutine handle_sumvar(nlvddi,nndim,nvar,cv3all)
+
+	use elabutil
+
+	implicit none
+
+	integer nlvddi,nndim,nvar
+	integer ivars(nvar)
+	real cv3all(nlvddi,nndim,0:nvar)
+
+	integer iv,ntot
+
+        cv3all(:,:,0) = 0.
+	ntot = sum(idsumvar)
+	
+	if( ntot == nvar ) then			!sum all
+          cv3all(:,:,0) = sum(cv3all,dim=3)
+	else
+	  do iv=1,nvar
+	    if( idsumvar(iv) > 0 ) then
+              cv3all(:,:,0) = cv3all(:,:,0) + cv3all(:,:,iv)
+	    end if
+	  end do
+	end if
+
+	end
 
 !***************************************************************
 !***************************************************************

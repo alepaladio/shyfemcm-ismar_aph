@@ -179,10 +179,13 @@
 ! initializes meteo variables
 
 	use meteo_forcing_module
+	use mod_info_output
 
 	implicit none
 
+	if( print_not_quiet_once() ) then
 	write(6,*) 'initializing meteo'
+	end if
 
 	call evap_init
 	call windcd_init
@@ -196,6 +199,7 @@
 	subroutine meteo_force
 
 ! update meteo variables and admin rain/evaporation
+! compute_heat_flux() is called in barocl because we need new tempv
 
 	use meteo_forcing_module
 
@@ -228,6 +232,20 @@
         call get_timestep(dt)
 	call get_act_dtime(dtime)
         call qflux3d(dtime,dt,nkn,nlvdi,tempv,dq)	!compute heat flux
+
+	end
+
+!*******************************************************************
+
+	subroutine output_meteo_and_heat_flux_data
+
+! this outputs meteo and heat flux data
+
+	use meteo_forcing_module
+
+	implicit none
+
+	call output_meteo_data
 
 	end
 

@@ -42,6 +42,7 @@
 ! 05.06.2023    ggu     handle exceptions, show records with highest errrors
 ! 09.06.2023    ggu     handle non existing files
 ! 21.12.2024    ggu     more functionallity, possible dump of data record
+! 29.05.2026    ggu     avoid compiler warnings
 
 ! note :
 !
@@ -119,7 +120,7 @@
 	if( nc == 0 ) then
 	  call clo_usage
 	else if( nc == 1 ) then
-	  call read_dbg_file
+	  call read_dbg_file(ierr)
 	else if( nc == 2 ) then
 	  call compare_files(ierr)
 	else
@@ -138,7 +139,7 @@
 
 !**************************************************************************
 
-	subroutine read_dbg_file
+	subroutine read_dbg_file(ierr)
 
 ! reads one file and outputs info
 
@@ -146,6 +147,8 @@
 	use mod_shympi_debug
 
 	implicit none
+
+	integer ierr
 
 	integer nc
 	integer ntime,nrec
@@ -160,16 +163,18 @@
 
 	if( ios /= 0 ) then
 	  write(6,*) 'no such file: ',trim(name_one)
-	  stop 'error opening file'
+	  stop 'error stop read_dbg_file: error opening file'
 	end if
 
 	if( .not. bquiet ) write(6,*) 'file 1: ',trim(name_one)
 
+	ierr = 0
 	ntime = 0
 
-	do while(.true.)
+	do while( ierr == 0 )
 
-	  read(1,end=9) dtime
+	  read(1,iostat=ierr) dtime
+	  if( ierr /= 0 ) exit
 	  call write_time_info(dtime)
 	  ntime = ntime + 1
 
@@ -180,11 +185,13 @@
 
 	  nrec = 0
 	  do while(.true.)
-	    read(1,end=9) nh,nv,nt
+	    read(1,iostat=ierr) nh,nv,nt
+	    if( ierr /= 0 ) exit
 	    if( nt == 0 ) exit
 	    nrec = nrec + 1
 	    ntot = nh*nv
-	    read(1,end=9) text
+	    read(1,iostat=ierr) text
+	    if( ierr /= 0 ) exit
 	    if( dump_var == text ) then
               call dump_data_record1(dtime,text,nt,ntot)
 	    else
@@ -194,7 +201,6 @@
 	  end do
 	end do
 
-    9	continue
 	if( .not. bsilent ) write(6,*) 'time records read: ',ntime
 
 	end
@@ -224,6 +230,8 @@
 	integer i
 	integer, save :: ndim = 0
 	integer, save :: iu = 444
+	integer, save :: ndump = 500
+	integer :: strive
 	character*40, save :: dump = 'dump.txt'
 
 	if( ndim == 0 ) then
@@ -235,21 +243,23 @@
 
 	call read_data_record1(nt,ntot)
 
+	strive = ntot / ndump
+
 	write(6,*) 'dumping data record for ',trim(text),' to ',trim(dump)
 
 	write(iu,*) 'time = ',dtime
 	write(iu,*) 'var  = ',trim(text)
 
 	if( nt == 1 ) then			!integer
-	  do i=1,ntot
+	  do i=1,ntot,strive
 	    write(iu,*) i,ival1(i)
 	  end do
 	else if( nt == 2 ) then			!real
-	  do i=1,ntot
+	  do i=1,ntot,strive
 	    write(iu,*) i,rval1(i)
 	  end do
 	else if( nt == 3 ) then			!double
-	  do i=1,ntot
+	  do i=1,ntot,strive
 	    write(iu,*) i,dval1(i)
 	  end do
 	else
@@ -297,7 +307,7 @@
 	END INTERFACE
 
 	INTERFACE 
-	  subroutine d_info(nh,nv,val1,val2,ipv,ipev,text)
+	  subroutine info_dval(nh,nv,val1,val2,ipv,ipev,text)
 	  use mod_shympi_debug
 	  integer nh,nv
 	  double precision val1(nh*nv)
@@ -309,7 +319,7 @@
 	END INTERFACE
 
 	INTERFACE 
-	  subroutine r_info(nh,nv,val1,val2,ipv,ipev,text)
+	  subroutine info_rval(nh,nv,val1,val2,ipv,ipev,text)
 	  use mod_shympi_debug
 	  integer nh,nv
 	  real val1(nh*nv)
@@ -321,7 +331,7 @@
 	END INTERFACE
 
 	INTERFACE 
-	  subroutine i_info(nh,nv,val1,val2,ipv,ipev,text)
+	  subroutine info_ival(nh,nv,val1,val2,ipv,ipev,text)
 	  use mod_shympi_debug
 	  integer nh,nv
 	  integer val1(nh*nv)
@@ -371,12 +381,6 @@
 	  write(6,*) 'file 2: ',trim(name_two)
 	end if
 
-	if( bbalance ) then
-	  call read_header(1,nipv,nipev,ipv,ipev)
-	  call read_header(2,nipv,nipev,ipv,ipev)
-	  call time_balance
-	end if
-
 	idiff_tot = 0
 	idiff_rec = 0
 	rdiff_max = 0
@@ -385,24 +389,32 @@
 	nipv = 0
 	nipev = 0
 
-	do while(.true.)
+	if( bbalance ) then
+	  call read_header(1,nipv,nipev,ipv,ipev)
+	  call read_header(2,nipv,nipev,ipv,ipev)
+	  call time_balance
+	end if
+
+	do while(.true.)	!read next time record
 
 	  if( bsummary .and. idiff_rec > 0 ) then
 	    write(6,*) '  nerr,maxerr: ',idiff_rec,rdiff_max
 	  end if
 
 	  call read_time_header(dtime,ntime,ierr)
-	  if( ierr == -1 ) goto 9
+	  if( ierr == -1 ) exit
+	  if( ierr > 0 ) goto 95
 
 	  idiff_rec = 0
 	  rdiff_max = 0
 	  bheader = .true.		!write header for differences
 
 	  nrec = 0
-	  do while(.true.)
+	  do while(.true.)	!read data record
 
 	    call read_data_header(nh,nv,nt,ntot,nrec,text,ierr)
-	    if( nt == 0 .or. ierr == -1 ) goto 9
+	    if( nt == 0 .or. ierr == -1 ) exit
+	    if( ierr > 0 ) goto 94
 
 	    call allocate_arrays(ntot,ndim &
      &			,ival1,ival2,rval1,rval2,dval1,dval2)
@@ -413,7 +425,7 @@
 	    blcheck = bcheck		!local check
 	    call handle_exception(text,ntime,blcheck)
 
-	    if( .not. blcheck ) then
+	    if( .not. blcheck ) then	!ignores next record
 	      read(1)
 	      read(2)
 	      if( bverbose ) write(6,*) nrec,nh,nv,nt,idiff,trim(text)
@@ -433,7 +445,7 @@
 	    if( text == 'ipev' ) call save_int(nh,ival1,nipev,ipev)
 
 	    if( bshowdiff .or. bverbose ) then
-	      call info(nt,nh,nv,ipv,ipev,text)
+	      call info_val(nt,nh,nv,ipv,ipev,text)
 	    end if
 
 	    if( bsummary ) then
@@ -449,14 +461,12 @@
 	    idiff_tot = idiff_tot + idiff
 	    idiff_rec = idiff_rec + idiff
 
-	  end do
+	  end do	!end of data records
 
 	  if( idiff_rec > 0 ) ntrerr = ntrerr + 1
 	  if( bstop .and. idiff_tot > 0 ) exit
 	  if( bverbose ) write(6,*) 'nrecs checked: ',nrec
-	end do
-
-    9	continue
+	end do		!end of time records
 
 	close(1)
 	close(2)
@@ -493,6 +503,10 @@
    96	continue
 	write(6,*) 'text: ',trim(text1),' - ',trim(text2)
 	stop 'error stop check_debug: text mismatch'
+   95	continue
+	stop 'error stop check_debug: read error in time header'
+   94	continue
+	stop 'error stop check_debug: read error in data record'
 	end
 
 !*******************************************************************
@@ -511,23 +525,21 @@
 
 	double precision dtime1,dtime2
 
-	  read(1,end=9) dtime1
-	  read(2,end=9) dtime2
-	  if( dtime1 .ne. dtime2 ) goto 99
-	  dtime = dtime1
-	  call write_time_info(dtime)
-	  ntime = ntime + 1
+	read(1,iostat=ierr) dtime1
+	if( ierr /= 0 ) return
+	read(2,iostat=ierr) dtime2
+	if( ierr /= 0 ) return
 
-	  if( bverbose ) then
-	    write(6,*) '       irec          nh          nv' // &
+	if( dtime1 .ne. dtime2 ) goto 99
+	dtime = dtime1
+	call write_time_info(dtime)
+	ntime = ntime + 1
+
+	if( bverbose ) then
+	  write(6,*) '       irec          nh          nv' // &
      &			'        type        diff name'
-	  end if
+	end if
 
-	ierr = 0
-	return
-
-    9	continue
-	ierr = -1
 	return
    99	continue
 	write(6,*) 'times: ',dtime1,dtime2
@@ -546,7 +558,7 @@
 
 	irec = irec + 1
 
-	if( .not. bquiet ) then
+	if( .not. bsilent ) then
 	  write(6,*) 'irec = ',irec,'  time = ',dtime
 	end if
 
@@ -569,31 +581,32 @@
 	integer nh2,nv2,nt2
 	character*80 text1,text2
 
+	ierr = -1
+
+	read(1,iostat=ierr) nh1,nv1,nt1
+	if( ierr /= 0 ) return
+	read(2,iostat=ierr) nh2,nv2,nt2
+	if( ierr /= 0 ) return
+	if( nh1 .ne. nh2 ) goto 98
+	if( nv1 .ne. nv2 ) goto 98
+	if( nt1 .ne. nt2 ) goto 98
+	nh = nh1
+	nv = nv1
+	nt = nt1
+	ntot = nh*nv
+
+	if( nt .eq. 0 ) return
+	nrec = nrec + 1
+
+	read(1,iostat=ierr) text1
+	if( ierr /= 0 ) return
+	read(2,iostat=ierr) text2
+	if( ierr /= 0 ) return
+	if( text1 .ne. text2 ) goto 96
+	text = text1
+
 	ierr = 0
 
-	    read(1,end=9) nh1,nv1,nt1
-	    read(2,end=9) nh2,nv2,nt2
-	    if( nh1 .ne. nh2 ) goto 98
-	    if( nv1 .ne. nv2 ) goto 98
-	    if( nt1 .ne. nt2 ) goto 98
-	    nh = nh1
-	    nv = nv1
-	    nt = nt1
-	    ntot = nh*nv
-
-	    if( nt .eq. 0 ) goto 9
-	    nrec = nrec + 1
-
-	    !read(1,end=9) text1
-	    !read(2,end=9) text2
-	    read(1,end=9) text1
-	    read(2,end=9) text2
-	    if( text1 .ne. text2 ) goto 96
-	    text = text1
-
-	return
-   9	continue
-	ierr = -1
 	return
    98	continue
 	if( nh1 == 0 .and. nv1 == 0 .and. nt1 == 0 ) then
@@ -694,7 +707,7 @@
 
 !*******************************************************************
 
-	subroutine info(nt,nh,nv,ipv,ipev,text)
+	subroutine info_val(nt,nh,nv,ipv,ipev,text)
 
 	use mod_shympi_debug
 
@@ -706,11 +719,11 @@
 	character*(*) text
 
 	if( nt == 1 ) then			!integer
-	  call i_info(nh,nv,ival1,ival2,ipv,ipev,text)
+	  call info_ival(nh,nv,ival1,ival2,ipv,ipev,text)
 	else if( nt == 2 ) then			!real
-	  call r_info(nh,nv,rval1,rval2,ipv,ipev,text)
+	  call info_rval(nh,nv,rval1,rval2,ipv,ipev,text)
 	else if( nt == 3 ) then			!double
-	  call d_info(nh,nv,dval1,dval2,ipv,ipev,text)
+	  call info_dval(nh,nv,dval1,dval2,ipv,ipev,text)
 	else
 	  write(6,*) 'cannot handle nt = ',nt
 	  stop 'error stop: nt'
@@ -833,7 +846,7 @@
 !*******************************************************************
 !*******************************************************************
 
-	subroutine d_info(nh,nv,val1,val2,ipv,ipev,text)
+	subroutine info_dval(nh,nv,val1,val2,ipv,ipev,text)
 
 	use mod_shympi_debug
 
@@ -860,8 +873,10 @@
 	  ipvv = ipev
 	else
 	  write(6,*) nh,size(ipv),size(ipev)
-	  stop 'error stop r_info: unknown nh'
+	  stop 'error stop info_dval: unknown nh'
 	end if
+
+	if( all(val1==val2) ) return
 
 	textk = '         irec       k       l    kext'
 	texte = '         irec      ie       l   ieext'
@@ -869,8 +884,10 @@
 	text1 = textk
 	if( belem ) text1 = texte
 
-	write(6,*) 'differences found reading ',trim(text)
-	write(6,*) trim(text1) // trim(text2)
+	if( .not. bquiet ) then
+	  write(6,*) 'differences found reading ',trim(text)
+	  write(6,*) trim(text1) // trim(text2)
+	end if
 
 	ierr = 0
 	maxdif = 0.
@@ -888,16 +905,20 @@
 	  i = index(j)
 	  iv = 1 + mod((i-1),nv)
 	  ih = 1 + (i-1)/nv
-	  write(6,1000) 'diff: ',i,ih,iv,ipvv(ih),val1(i),val2(i)
+	  if( .not. bquiet ) then
+	    write(6,1000) 'diff: ',i,ih,iv,ipvv(ih),val1(i),val2(i)
+	  end if
 	end do
-	write(6,*) 'maximum difference: ',maxdif
+	if( .not. bquiet ) then
+	  write(6,*) 'maximum difference: ',maxdif
+	end if
 
  1000	format(a,4i8,2f18.6)
 	end
 
 !*******************************************************************
 
-	subroutine r_info(nh,nv,val1,val2,ipv,ipev,text)
+	subroutine info_rval(nh,nv,val1,val2,ipv,ipev,text)
 
 	use mod_shympi_debug
 
@@ -924,8 +945,10 @@
 	  ipvv = ipev
 	else
 	  write(6,*) nh,size(ipv),size(ipev)
-	  stop 'error stop r_info: unknown nh'
+	  stop 'error stop info_rval: unknown nh'
 	end if
+
+	if( all(val1==val2) ) return
 
 	textk = '         irec       k       l    kext'
 	texte = '         irec      ie       l   ieext'
@@ -933,8 +956,10 @@
 	text1 = textk
 	if( belem ) text1 = texte
 
-	write(6,*) 'differences found reading ',trim(text)
-	write(6,*) trim(text1) // trim(text2)
+	if( .not. bquiet ) then
+	  write(6,*) 'differences found reading ',trim(text)
+	  write(6,*) trim(text1) // trim(text2)
+	end if
 
 	ierr = 0
 	maxdif = 0.
@@ -952,16 +977,20 @@
 	  i = index(j)
 	  iv = 1 + mod((i-1),nv)
 	  ih = 1 + (i-1)/nv
-	  write(6,1000) 'diff: ',i,ih,iv,ipvv(ih),val1(i),val2(i)
+	  if( .not. bquiet ) then
+	    write(6,1000) 'diff: ',i,ih,iv,ipvv(ih),val1(i),val2(i)
+	  end if
 	end do
-	write(6,*) 'maximum difference: ',maxdif
+	if( .not. bquiet ) then
+	  write(6,*) 'maximum difference: ',maxdif
+	end if
 
  1000	format(a,4i8,2f18.6)
 	end
 
 !*******************************************************************
 
-	subroutine i_info(nh,nv,val1,val2,ipv,ipev,text)
+	subroutine info_ival(nh,nv,val1,val2,ipv,ipev,text)
 
 	use mod_shympi_debug
 
@@ -985,12 +1014,16 @@
 
 	if( nh == size(ipv) ) then
 	  ipvv = ipv
+	  belem = .false.
 	else if( nh == size(ipev) ) then
 	  ipvv = ipev
+	  belem = .true.
 	else
 	  write(6,*) nh,size(ipv),size(ipev)
-	  stop 'error stop i_info: unknown nh'
+	  stop 'error stop info_ival: unknown nh'
 	end if
+
+	if( all(val1==val2) ) return
 
 	textk = '         irec       k       l    kext'
 	texte = '         irec      ie       l   ieext'
@@ -998,10 +1031,13 @@
 	text1 = textk
 	if( belem ) text1 = texte
 
-	write(6,*) 'differences found reading ',trim(text)
-	write(6,*) trim(text1) // trim(text2)
+	if( .not. bquiet ) then
+	  write(6,*) 'differences found reading ',trim(text)
+	  write(6,*) trim(text1) // trim(text2)
+	end if
 	if( iu > 0 ) write(iu,*) trim(text1) // trim(text2)
 
+	ierr = 0
 	do i=1,nh*nv
 	  iv = 1 + mod((i-1),nv)
 	  ih = 1 + (i-1)/nv
@@ -1010,7 +1046,9 @@
 	  else if( val1(i) /= val2(i) ) then
 	    ierr = ierr + 1
 	    if( imax > 0 .and. ierr > imax ) cycle
-	    write(6,1000) 'diff: ',i,ih,iv,ipvv(ih),val1(i),val2(i)
+	    if( .not. bquiet ) then
+	      write(6,1000) 'diff: ',i,ih,iv,ipvv(ih),val1(i),val2(i)
+	    end if
 	  end if
 	end do
 
@@ -1026,6 +1064,8 @@
 
 ! finds first time record equal in both files
 
+	use mod_shympi_debug
+
 	implicit none
 
 	integer iu,nrec
@@ -1036,8 +1076,11 @@
 	call peek_time_record(2,dtime2,ierr2)
 	if( ierr1 /= 0 .or. ierr2 /= 0 ) goto 99
 
+	!write(6,*) 'balance: ',dtime1, dtime2
 	if( dtime1 == dtime2 ) then	!same time in initial record
-	  write(6,*) 'time_balance: starting time found ',dtime1
+	  if( .not. bsilent ) then
+	    write(6,*) 'time_balance: starting time found ',dtime1
+	  end if
 	  return
 	else if( dtime1 < dtime2 ) then
 	  iu = 1
@@ -1082,15 +1125,10 @@
 	double precision dtime
 	integer ierr
 
-	read(iunit,end=9) dtime
+	read(iunit,iostat=ierr) dtime
+	if( ierr /= 0 ) return
 	backspace(iunit)
 
-	ierr = 0
-	!write(6,*) ierr,dtime
-	return
-    9	continue
-	ierr = -1
-	return
 	end
 
 !*******************************************************************
@@ -1219,6 +1257,8 @@
 
 	subroutine handle_exception(text,ntime,blcheck)
 
+	use mod_shympi_debug
+
 	implicit none
 
 	character*(*) text
@@ -1227,17 +1267,31 @@
 
 	logical bignore
 
+	blcheck = .true.
+	!return
+
 	if( ntime > 2 ) return		!only do for first data record
 
 	bignore = .false.
 
-	if( trim(text) == 'zov' ) bignore = .true.
+	!if( trim(text) == 'zov' ) bignore = .true.
+	!if( trim(text) == 'zeov' ) bignore = .true.
+	!if( trim(text) == 'hdkov' ) bignore = .true.
+	!if( trim(text) == 'hdeov' ) bignore = .true.
+	if( trim(text) == 'utlov' ) bignore = .true.
+	if( trim(text) == 'vtlov' ) bignore = .true.
+	if( trim(text) == 'uov' ) bignore = .true.
+	if( trim(text) == 'vov' ) bignore = .true.
+	if( trim(text) == 'wlov' ) bignore = .true.
+	!if( trim(text) == 'mfluxv' ) bignore = .true.
 	if( trim(text) == 'fxv' ) bignore = .true.
 	if( trim(text) == 'fyv' ) bignore = .true.
 
 	if( bignore ) then
 	  blcheck = .false.
-	  write(6,*) 'ignoring ',trim(text),' in time record ',ntime
+	  if( .not. bquiet ) then
+	    write(6,*) ' in time record ',ntime,' ignoring ',trim(text)
+	  end if
 	end if
 
 	end

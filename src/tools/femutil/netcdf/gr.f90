@@ -22,6 +22,10 @@
 
       program gr
 
+! this programs reads an existing nc file, 
+! changes some infortmation,
+! and writes a new file with the changed information
+
 	use ncf
 
       implicit none
@@ -78,10 +82,12 @@
 
 !     We will learn about the data file and store results in these
 !     program variables.
+
       integer ndims_in, nvars_in, ngatts_in, idunlim
       integer nc,ia,varid
 
 !     Loop indices
+
       integer lat, lon, id, ncid_out
 
 	logical, save :: bvarelab = .false.
@@ -138,7 +144,7 @@
 	do varid=1,nvars_in
 	  call ncf_var_inf(ncid,varid,vitem)
 	  call ncf_var_make(ncid_out,vitem)
-	  call ncf_print_variable(vitem)
+	  call ncf_print_variable(ncid,vitem)
 	  do ia=1,vitem%natts
 	    call ncf_att_inf(ncid,varid,ia,aitem)
 	    if( battelab) call att_elab(varid,aitem)

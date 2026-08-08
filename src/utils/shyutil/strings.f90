@@ -67,6 +67,10 @@
 ! 03.10.2024	ggu	new has_direction_ivar() and is_2d()
 ! 01.04.2025	ggu	ivar values and range for BFM model
 ! 24.04.2025	ggu	new entries for sensible, latent and long wave heat flux
+! 10.07.2025	ggu	started parsing BFM variable names
+! 15.09.2025	ggu	new id_tentative, do not compress '_'
+! 03.10.2025	ggu	new routine ivar2short() and variable 78
+! 27.01.2026	ggu	add weutro description (populate_strings_weutro)
 !
 ! contents :
 !
@@ -103,6 +107,7 @@
 !
 !       subroutine string2ivar(string,ivar)
 !       subroutine ivar2string(ivar,string,isub)
+!       subroutine ivar2short(ivar,short)
 !	subroutine ivar2filename(ivar,filename)
 !	subroutine ivar2femstring(ivar,femstring)
 !
@@ -152,7 +157,7 @@
 
 	  character*80 :: search
 	  character*80 :: full
-	  character*10 :: short
+	  character*80 :: short
 	  integer :: ivar
 	  integer :: irange
 
@@ -283,12 +288,14 @@
 	if( id > idlast ) id = ids
 
         name_aux = string
-        bdebug = ( name_aux(1:6) == 'transp' )
+        !bdebug = .false.
+        !bdebug = bdebug .or. ( name_aux(1:6) == 'Oxygen' )
+        !bdebug = bdebug .or. ( name_aux(1:7) == 'bfm_O2o' )
         bdebug = .false.
         if( bdebug ) then
           write(6,*) '-----------------------------'
           write(6,*) 'debug: ',trim(name),' ',trim(string)
-          write(6,*) 'id/ids: ',id,ids
+          write(6,*) 'id/ids/idlast: ',id,ids,idlast
           if( id > 0 )  write(6,*) 'id: ',trim(pentry(id)%search)
           if( ids > 0 ) write(6,*) 'ids: ',trim(pentry(ids)%short)
           write(6,*) '-----------------------------'
@@ -308,20 +315,23 @@
 	integer ivar
 
 	integer id,ivmin,ivmax
+	integer id_tentative
 	logical bdebug
 
 	call check_populate
 
 	bdebug = ivar == -1
 	bdebug = .false.
+	id_tentative = 0	!this is set if if we find ivar in range
 
 	do id=1,idlast
 	  ivmin = pentry(id)%ivar
 	  ivmax = ivmin + pentry(id)%irange
 	  if( bdebug ) write(6,*) id,ivar,ivmin,ivmax
-	  if( ivmin == ivar ) exit
-	  if( ivmin < ivar .and. ivar < ivmax ) exit
+	  if( ivmin == ivar ) exit	!ivar found
+	  if( ivmin < ivar .and. ivar < ivmax ) id_tentative = id
 	end do
+	if( id > idlast .and. id_tentative > 0 ) id = id_tentative
 	if( id > idlast ) id = 0
 
 	strings_get_id_by_ivar = id
@@ -514,7 +524,9 @@
 	call compress_string(string)
 	id = strings_get_id(string)
 	if( id /= 0 ) then
-	  write(6,*) ivar,'  ',name,'  ',string
+	  write(6,*) 'error adding variable ',ivar
+	  write(6,*) ivar,'  ',trim(name),'  ',trim(string)
+	  write(6,*) 'info on offending variable: '
 	  call strings_info(id)
 	  stop 'error stop strings_add_new: name already present'
 	end if
@@ -594,6 +606,7 @@
         return
    98   continue
         call strings_info(id)
+        write(6,*) 'looking for: ',trim(name)
         write(6,*) 'ivar,iv: ',ivar,iv
         stop 'error stop strings_check_consistency: ivar/=iv'
    99   continue
@@ -618,6 +631,20 @@
 	write(6,*) 'irange: ',pentry(id)%irange
 
 	end subroutine strings_info
+
+!******************************************************************
+
+	subroutine strings_info_all
+
+	integer id
+
+	do id=1,idlast
+	  write(6,*) '----------------------------'
+	  call strings_info(id)
+	  write(6,*) '----------------------------'
+	end do
+
+	end subroutine strings_info_all
 
 !****************************************************************
 
@@ -788,6 +815,21 @@
 	end
 
 !****************************************************************
+
+        subroutine ivar2short(ivar,short)
+
+	use shyfem_strings
+
+        implicit none
+
+        integer ivar
+        character*(*) short
+
+	call strings_get_short_name(ivar,short)		!new call
+
+	end
+
+!****************************************************************
 !****************************************************************
 !****************************************************************
 
@@ -901,7 +943,8 @@
 
 	do l=1,lmax
 	  c = string(l:l)
-	  if( c == ' ' .or. c == '_' ) cycle
+	  !if( c == ' ' .or. c == '_' ) cycle
+	  if( c == ' ' ) cycle
 	  ll = ll + 1
 	  s(ll:ll) = c
 	end do
@@ -1215,6 +1258,165 @@
 !****************************************************************
 !****************************************************************
 
+	subroutine read_bfm_namelist
+
+	use shyfem_strings
+
+	implicit none
+
+	integer ios,varid
+	character*80 file
+	character*256 line,lastline
+	character*3 short
+	character*80 long
+
+	file='shyfem_vars.py'
+	lastline = ' '
+
+	open(1,file=file,status='old',form='formatted',iostat=ios)
+	if( ios /= 0 ) return
+
+	write(6,*) 'reading bfm namelist ',trim(file)
+
+	do
+	  read(1,'(a)',iostat=ios) line
+	  if( ios /= 0 ) goto 99
+	  if( line(1:6) == ' bfm={' ) exit
+	  if( line(1:5) == 'bfm={' ) exit
+	  lastline = line
+	  !write(6,*) trim(lastline)
+	end do
+
+	write(6,'(a)') trim(lastline)
+	write(6,*) 'bfm line found'
+	line(1:10) = ' '
+
+	do
+	  call parse_bfm_line(line,varid,short,long)
+	  call strings_add_new(long,varid)
+	  call strings_set_short(varid,short)
+	  read(1,'(a)',iostat=ios) line
+	  if( ios /= 0 ) goto 99
+	  if( line(1:2) == ' }' ) exit
+	  if( line(1:1) == '}' ) exit
+	end do
+
+	write(6,*) 'finished reading bfm namelist '
+	close(1)
+
+	return
+   99	continue
+	write(6,*) 'iostat = ',ios
+	write(6,*) trim(lastline)
+	stop 'error stop read_bfm_namelist: error reading namelist'
+	end subroutine
+
+!****************************************************************
+
+	subroutine parse_bfm_line(line,varid,short,long)
+
+	implicit none
+
+	character*(*) line
+	integer varid
+	character*(*) short
+	character*(*) long
+
+	integer is,ioff,l,ll,ls
+	character*256 string
+	character*80 svarid
+	double precision d(1)
+
+	integer istos,istot,iscand
+
+	ioff = 1
+	ls = len(short)
+	ll = len(long)
+
+	is = istot(line,string,ioff)
+	!write(6,*) is,ioff,trim(string)
+	svarid=string(6:8)
+
+	is = iscand(svarid,d,1)
+	if( is /= 1 ) goto 99
+	varid = nint(d(1))
+	!write(6,*) 'varid: ',trim(svarid),varid
+
+	is = istot(line,string,ioff)
+	!write(6,*) is,ioff,trim(string)
+
+	is = istot(line,string,ioff)
+	short = string(1:ls)
+	!write(6,*) is,ioff,trim(string)
+
+	string = line(ioff:)
+	long = adjustl(string(1:ll))
+	!write(6,*) is,ioff,trim(string)
+	!write(6,*) 'final line'
+	!write(6,*) line
+	
+	!write(6,*) 'final:'
+	write(6,*) varid,'  ',short,'  ',trim(long)
+
+	return
+   99	continue
+	write(6,*) 'cannot parse: ',trim(svarid)
+	stop 'error stop parse_bfm_line: cannot parse'
+	end subroutine
+
+!****************************************************************
+
+	subroutine strings_add(ivar,short,long)
+
+	use shyfem_strings
+
+	implicit none
+
+	integer ivar
+	character*(*) short
+	character*(*) long
+
+	call strings_add_new(long,ivar)
+	call strings_set_short(ivar,short)
+
+	end
+
+!****************************************************************
+!****************************************************************
+!****************************************************************
+
+	subroutine populate_strings_weutro
+
+! populates string information for weutro
+
+	use shyfem_strings
+
+	implicit none
+
+	call strings_add(701,'nh3','nitrogen NH3')
+	call strings_add(702,'no3','nitrogen NO3')
+	call strings_add(703,'opo4','ortophosphate')
+	call strings_add(704,'phyto','phytoplankton')
+	call strings_add(705,'cbod','carbon biological oxigen demand')
+	call strings_add(706,'do','dissolved oxygen')
+	call strings_add(707,'on','organic nitrogen')
+	call strings_add(708,'op','organic phosphorus')
+	call strings_add(709,'zoo','zooplankton')
+
+	call strings_add(721,'opsed','oraganic phosphorus in sediments')
+	call strings_add(722,'onsed','oraganic nitrogen in sediments')
+
+	call strings_add(731,'shellfarm','density of benthic filter feeding')
+	call strings_add(732,'shellsize','size of each individual')
+	call strings_add(733,'shelldiag','diagnostic variable')
+
+	call strings_add(741,'ulva_bio','ulva biomass')
+	call strings_add(742,'ulva_quota','ulva quota')
+
+	end
+
+!****************************************************************
+
 	subroutine populate_strings
 
 ! populates string information
@@ -1285,9 +1487,11 @@
 	call strings_add_new('long wave radiation',49)
 
 	call strings_add_new('bottom stress',60)
+	call strings_add_new('friction parameter',61)
 	call strings_add_new('general index',75)
 	call strings_add_new('general type',76)
 	call strings_add_new('general distance',77)
+	call strings_add_new('generic derived variable',78)
 	call strings_add_new('lagrangian',80)
 	call strings_add_new('lagrangian (general)',80)
 	call strings_add_new('lagrangian age',81)
@@ -1316,9 +1520,9 @@
 	call strings_add_new('bfm (pelagic)',600,55)
 	call strings_add_new('bfm (benthic)',655,44)
 
-	call strings_add_new('weutro (pelagic)',700,20)
-	call strings_add_new('weutro (sediment)',720,10)
-	call strings_add_new('weutro (shell fish)',730,10)
+	!call strings_add_new('weutro (pelagic)',700,20)
+	!call strings_add_new('weutro (sediment)',720,10)
+	!call strings_add_new('weutro (shell fish)',730,10)
 
 	call strings_add_new('suspended sediment concentration',800,50)
 	call strings_add_new('erosion-deposition',891)
@@ -1385,9 +1589,11 @@
 	call strings_set_short(49,'qlong')
 
 	call strings_set_short(60,'bstress')
+	call strings_set_short(61,'fric')
 	call strings_set_short(75,'index')
 	call strings_set_short(76,'type')
 	call strings_set_short(77,'distance')
+	call strings_set_short(78,'genvar')
 	call strings_set_short(80,'lgr')
 	call strings_set_short(81,'lagage')
 	call strings_set_short(82,'lagdep')
@@ -1414,9 +1620,9 @@
 	call strings_set_short(600,'bfmpel')
 	call strings_set_short(655,'bfmben')
 
-	call strings_set_short(700,'weutrop')
-	call strings_set_short(720,'weutrosd')
-	call strings_set_short(730,'weutrosf')
+	!call strings_set_short(700,'weutrop')
+	!call strings_set_short(720,'weutrosd')
+	!call strings_set_short(730,'weutrosf')
 
 	call strings_set_short(800,'ssc')
 	call strings_set_short(891,'sederodep')
@@ -1430,6 +1636,19 @@
 	call strings_set_short(851,'bsedkg')
 	call strings_set_short(852,'bsedka')
 	call strings_set_short(853,'bsedm')
+
+!---------------------------------------------------------------------
+!	populate bfm strings
+!---------------------------------------------------------------------
+
+	call populate_strings_weutro
+	call populate_strings_bfm
+	call populate_strings_cbms
+
+!---------------------------------------------------------------------
+
+	!call strings_info_all
+	!call read_bfm_namelist
 
 !---------------------------------------------------------------------
 

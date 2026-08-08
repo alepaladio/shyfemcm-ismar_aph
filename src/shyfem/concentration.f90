@@ -270,6 +270,10 @@
 ! 09.05.2023    lrp     introduce top layer index variable
 ! 31.05.2023    ggu     in conzstab, use ie_mpi, run over nkn_unique (bug fix)
 ! 27.09.2024    ggu     btvddebug introduced
+! 10.11.2025    ggu     bug in massconc: only run over nkn_unique
+! 21.04.2026    ggu     use bdry to see if mfluxv should be used
+! 28.04.2026    ggu     insert more timing calls
+! 08.05.2026    ggu     adjust qflux if node is dry
 !
 !*********************************************************************
 
@@ -584,7 +588,7 @@
         real rcv(nlvddi,nkn)	!boundary condition (value of scalar)
 	real cobs(nlvddi,nkn)	!observations (for nudging)
 	real robs		!use nudging
-	real rtauv(nlvddi,nkn)	!observations (for nudging)
+	real rtauv(nlvddi,nkn)	!inverse time scale (for nudging)
         real rkpar
 	real wsink
 	real wsinkv(0:nlvddi,nkn)
@@ -639,6 +643,7 @@
 ! initialization
 !-------------------------------------------------------------
 
+	call cpu_time_start(16)
 	call getaz(azpar)
 	adpar=getpar('adpar')
 	aapar=getpar('aapar')
@@ -649,6 +654,7 @@
 	btvd1 = itvd .eq. 1
 	btvd2 = itvd .eq. 2
 	btvddebug = .true.
+	btvddebug = .false.
 	btvddebug = btvddebug .and. btvd2
 
 	allocate(saux(nlvddi,nkn))
@@ -681,10 +687,13 @@
 	call get_timestep(dt)
 	call get_act_dtime(dtime)
 	call get_act_timeline(aline)
+	call cpu_time_start(16)
 
+	call cpu_time_start(17)
 	saux = 0.
 	call scalar_stability(dt,robs,rtauv,wsinkl,wsinkv,rkpar, &
      &					sindex,istot,saux)
+	call cpu_time_end(17)
 
 !$OMP CRITICAL
 	if(shympi_is_master()) then
@@ -723,14 +732,21 @@
 ! transport and diffusion
 !-------------------------------------------------------------
 
+	call cpu_time_start(19)
 	call massconc(-1,cnv,nlvddi,massold)
+	call cpu_time_end(19)
 
+	call cpu_time_start(18)
 	do isact=1,istot
 
 	  dtstep = -((istot-isact)*dt)/istot
 	  dtime_act = dtime + dtstep		!why is dtstep negative?
 
+	  call set_conz_debug(what,isact,istot,dtime_act)
+
+	  call cpu_time_start(23)
 	  call make_scal_flux(what,isact,rcv,cnv,sbflux,sbconz,ssurface)
+	  call cpu_time_end(23)
 	  !call check_scal_flux(what,cnv,sbconz)
 
 	  if( what /= 'temp' ) then
@@ -744,6 +760,7 @@
 	  if( btvd1 ) call tvd_grad_3d(cnv,gradxv,gradyv,saux,nlvddi)
 	  if( btvddebug ) call tvd_debug_initialize(dtime_act,what,isact)
 
+	  call cpu_time_start(24)
           !call conz3d_orig( &
           call conz3d_omp(       &
      &           cnv &
@@ -759,7 +776,9 @@
      &          ,istot,isact &
      &          ,nlvddi,nlv &
      &               )
+	  call cpu_time_end(24)
 
+	  call cpu_time_start(25)
 	  call assert_min_max_property(cnv,saux,sbconz,gradxv,gradyv,eps)
 
 	  call limit_scalar(what,dtstep,cnv)
@@ -767,9 +786,11 @@
           call shympi_exchange_3d_node(cnv)
           call bndo_setbc(what,nlvddi,cnv,rcv,uprv,vprv)
           call shympi_exchange_3d_node(cnv)
+	  call cpu_time_end(25)
 
 	  if( btvddebug ) call tvd_debug_finalize
 	end do
+	call cpu_time_end(18)
 
         !if( shympi_is_parallel() .and. istot > 1 ) then
         !  write(6,*) 'cannot handle istot>1 with mpi yet'
@@ -784,7 +805,9 @@
 !-------------------------------------------------------------
 
 	if( levdbg > 2 ) then
+	  call cpu_time_start(19)
 	  call massconc(+1,cnv,nlvddi,mass)
+	  call cpu_time_end(19)
 	  massdiff = mass - massold
 !$OMP CRITICAL
           if(shympi_is_master())then
@@ -976,6 +999,7 @@
 	double precision cauxl(nlvddi)
 ! tvd
 	logical btvd
+	logical bdry
 	integer ic,kc,id,kdebug,ippp
 	integer ies
 	integer iext
@@ -983,6 +1007,7 @@
         double precision wws
 
 ! functions
+	logical is_dry_node
 	integer ipint,ieint
 	integer ipext,ieext
 	integer ithis
@@ -1488,14 +1513,15 @@
 	do k=1,ntot
 	  ilevel = ilhkv(k)
 	  jlevel = jlhkv(k)
+	  bdry = is_dry_node(k)
 	  do l=jlevel,ilevel
-            !mflux = cbound(l,k)		!mass flux has been passed
-	    cconz = cbound(l,k)		!concentration has been passed
 	    qflux = mfluxv(l,k)
+	    if( bdry ) qflux = 0.
+	    cconz = cbound(l,k)			!concentration has been passed
 	    if( qflux .lt. 0. .and. is_boundary(k) ) cconz = cn1(l,k)
 	    mflux = qflux * cconz
 
-            cn(l,k) = cn(l,k) + dt * mflux	!explicit treatment
+            cn(l,k) = cn(l,k) + dt * mflux		!explicit treatment
 
 	    loading = rload*load(l,k)
             if( loading .eq. 0. ) then
@@ -1581,6 +1607,8 @@
      &			,nlvddi,nlev)
 
 ! checks stability
+!
+! this is normally called with a time step of ddt = 1
 !
 ! cn     new concentration
 ! co     old concentration
@@ -1705,14 +1733,17 @@
 	double precision hold(0:nlvddi+1,3)
 	double precision present(0:nlvddi+1)
 
+	logical bdry
         integer kstab
 	real dtorig
+	real qflux
 
 	integer, save :: icall = 0
 	integer, save :: iuinfo = 0
 	double precision, save :: da_out(4) = 0
 
 ! functions
+	logical is_dry_node
 	logical is_zeta_bound,openmp_in_parallel,openmp_is_master
 	logical has_output_d,next_output_d
 	real getpar
@@ -1794,11 +1825,14 @@
 !	-----------------------------------------------------------------
 
 	do k=1,nkn
+	  bdry = is_dry_node(k)
           do l=1,nlv
 	    !co(l,k)=cn1(l,k)	!DPGGU	!not used for stability
             cn(l,k)=0.          !Malta
             co(l,k)=0.
-	    if( mfluxv(l,k) .gt. 0. ) co(l,k) = mfluxv(l,k)	!point sources
+	    qflux = mfluxv(l,k)
+	    if( bdry ) qflux = 0.
+	    co(l,k) = qflux	!point sources
             cdiag(l,k)=0.
             clow(l,k)=0.
             chigh(l,k)=0.
@@ -1982,7 +2016,7 @@
 	  chigh(l,k) = chigh(l,k) + cadv
 	  clow(l,k) = clow(l,k) + chdiff
           cn(l,k) = cn(l,k) + cvdiff
-          co(l,k) = co(l,k) + dt * aj4 * hmed * robs * rtauv(l,k) !nudging
+          co(l,k) = dt * co(l,k) + dt * aj4 * hmed * robs * rtauv(l,k) !nudging
 	end do
 
 	end do		! loop over l
@@ -2021,14 +2055,12 @@
         kstab = 0		!node with highest stabind
 
 	do k=1,nkn_unique
-	  bdebug1 = k .eq. -1
 	  ilevel = ilhkv(k)
 	  jlevel = jlhkv(k)
           if( is_zeta_bound(k) ) cycle
 	  do l=jlevel,ilevel
             voltot = cdiag(l,k)
             flxtot = chigh(l,k) + clow(l,k) + cn(l,k) + co(l,k)
-	    if( bdebug1 ) write(99,*) k,l,voltot,flxtot
             if( voltot .gt. 0. ) then
                   aux1 = flxtot / voltot
                   if( aux1 .gt. stabind ) kstab = k
@@ -2043,7 +2075,7 @@
                   stabvert = max(stabvert,aux4)
                   aux5 = co(l,k) / voltot
                   stabpoint = max(stabpoint,aux5)
-	          if( bdebug1 ) write(99,*) aux1,aux2,aux3,aux4,aux5
+                  !stabind = max(stabind,stabpoint)	!ggguuu
             end if
 	  end do
 	end do
@@ -2064,6 +2096,8 @@
         istot = 1 + stabind / rstol
         sindex = stabind / rstol
 
+	call get_act_timeline(aline)
+	!write(579,*) trim(aline),stabind,stabpoint,stabpoint/stabind
 	!write(iuinfo,*) 'stability_scalar: ',istot,sindex,stabind
 
 	!if( .not. openmp_in_parallel() ) then
@@ -2127,7 +2161,8 @@
 
         masstot = 0.
 
-        do k=1,nkn
+        do k=1,nkn_unique
+        !do k=1,nkn
 	  lmax = ilhkv(k)
 	  lmin = jlhkv(k)
           sum = 0.
@@ -2214,7 +2249,7 @@
 	real rmax(nlvdi,nkn)		!aux arrray to contain max
 	real eps
 
-	logical bwrite,bstop
+	logical bwrite,bstop,bdry
 	integer k,ie,l,ii,lmax,lmin,ierr
 	integer levdbg
 	real amin,amax,c,qflux,dmax
@@ -2223,7 +2258,7 @@
 	character*20 aline
 
 	integer ipext
-	logical is_zeta_bound
+	logical is_zeta_bound,is_dry_node
 	real getpar
 
 	bwrite = .true.		! write every violation
@@ -2258,8 +2293,10 @@
 	do k=1,nkn
 	  lmax = ilhkv(k)
 	  lmin = jlhkv(k)
+	  bdry = is_dry_node(k)
 	  do l=lmin,lmax
 	    qflux = mfluxv(l,k)
+	    if( bdry ) qflux = 0.
 	    if( qflux .gt. 0. ) then
 	      c = sbconz(l,k)
 	      rmin(l,k) = min(rmin(l,k),c)
@@ -2369,7 +2406,8 @@
         integer k,l,lmax
 
         integer, parameter :: nbin = 11
-        integer ic(nbin+1)
+        integer ic(nbin)
+        real ac(nbin)
         real, save :: bins(nbin) = (/1.,2.,5.,10.,15.,20.,30.,40.,50.,75.,100./)
 
         call histo_init(nbin,bins)
@@ -2381,9 +2419,11 @@
           end do
         end do
 
-        call histo_final(ic)
+        call histo_return(nbin,ac,ic)
 
-        write(98,*) it,ic
+        write(98,*) it
+        write(98,*) ac
+        write(98,*) ic
 
         end
 
@@ -2393,6 +2433,7 @@
 
 	use levels
 	use basin
+	use mod_info_output
 
 	implicit none
 
@@ -2451,6 +2492,7 @@
 	  if( climit1 /= flag ) bclimit1 = .true.
 	  if( bclimit0 .and. bclimit1 .and. climit0 > climit1 ) goto 99
 	  
+	  if( print_verbose() ) then
 	  write(6,*) 'limiting scalars has been set up'
 	  if( btlimit0 ) write(6,*) 'limiting min temp: ',tlimit0
 	  if( btlimit1 ) write(6,*) 'limiting max temp: ',tlimit1
@@ -2458,6 +2500,7 @@
 	  if( bslimit1 ) write(6,*) 'limiting max salt: ',slimit1
 	  if( bclimit0 ) write(6,*) 'limiting min conz: ',climit0
 	  if( bclimit1 ) write(6,*) 'limiting max conz: ',climit1
+	  end if
 	end if
 
 	if( what == 'temp' ) then

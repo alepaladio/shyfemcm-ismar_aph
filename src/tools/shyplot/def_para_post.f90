@@ -229,6 +229,8 @@
 ! 20.07.2023    lrp     new parameter nzadapt
 ! 21.10.2023    ggu     only post processing parameters
 ! 18.09.2024    ggu     new parameters lgrcol, lgrtyp, rfaccol
+! 13.11.2025    ggu     new parameter rcircle
+! 22.05.2026    ggu     new parameter tzstring
 !
 !************************************************************************
 
@@ -794,17 +796,24 @@
 !		equal to |nctick|, so that the isolines correspond to the 
 !		values	written on the colorbar. For compatibility, a value of
 !		1 plots all isolines. (Default 0)
-! |isoinp|	Normally inside elements the values are interpolated.
+! |isoinp|	Normally inside elements the values are interpolated
+!		(|isoinp=1|).
 !		Sometimes it is useful to just plot the value of the
 !		node without interpolation inside the element. This can
 !		be accomplished by setting |isoinp=0|. Setting instead
 !		|isoinp| to a value of 2 plots a constant value in
-!		the element. (Default 1)
+!		the element. Finally, for |isoinp=3| a circle with radius
+!		|rcircle| is plotted around the nodes that contain a value.
+!		This is usefull for emphasizing patterns that normally 
+!		are too small to be seen.
+!		(Default 1)
+! |rcircle|	Radius for |isoinp=3|. (Default 0)
 
         call addpar('nisomx',20.)      !maximum number of isovalues allowed
         call addpar('nctick',0.)       !default number of ticks to use
         call addpar('isolin',0.)       !plot isolines with color ?
         call addpar('isoinp',1.)       !interpolate inside elements
+        call addpar('rcircle',0.)      !radius of circle
 
 ! Next parameters are for the lagrangian model and the way
 ! how to plot the particles.
@@ -998,12 +1007,26 @@
 ! |xdate, ydate|	Starting point for the date text (lower left corner).
 ! |sdate|		Point size of the text. (Default 18)
 ! |idate|		Output mode. If 0 no date is written to the
-!			plot, else the date and time is written. (Default 0)
+!			plot, else the date and time is written with
+!			following format:
+!			\begin{description}
+!			\item[1] 2026-05-14::12:00:00
+!			\item[2] 13 May 200
+!			\item[3] 2026-05-14  12:00:00
+!			\item[4] 2026-05-14  12:00:00 GMT
+!			\item[5] 2026-05-14
+!			\end{description}
+!			(Default 0)
+! |tzstring|		Anything that should come after the date. 
+!			This is typically used to add a specific time zone.
+!			For example, tzstring=' (UTC)' adds this string
+!			after the date string. (Default ' ')
 
 	call addpar('xdate',0.)
 	call addpar('ydate',0.)
-	call addpar('sdate',18.)         !size
+	call addpar('sdate',18.)        !size
 	call addpar('idate',0.)         !mode
+	call addfnm('tzstring','')
 
 ! Wind data can be used to insert a wind vector into the figure.
 ! This is useful because in the case of variable wind 

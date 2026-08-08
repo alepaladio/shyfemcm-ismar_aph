@@ -65,7 +65,7 @@ optintp: $(ALL) $(LIBF) optintp.o
 
 cleanall: clean cleanzip cleangrd
 
-clean: cleanobj cleanexe cleanvar cleantex cleanlinks
+clean: cleanobj cleanexe cleanvar cleantex cleanlinks cleanfem
 
 cleanobj:
 	-rm -f *.o
@@ -83,6 +83,9 @@ cleanexe:
 cleantex:
 	-rm -f *.dvi *.aux
 
+cleanfem:
+	-rm -f *.fem
+
 cleanvar:
 	-rm -f a.out core
 	-rm -f *.bak *.tmp
@@ -92,6 +95,10 @@ cleanvar:
 	-rm -f errout.dat
 	-rm -f gmon.out
 	-rm -f out.ps plot.ps
+	-rm -f *.txt
+	-rm -f col.[0-9]*
+	-rm -f *_
+	-rm -f out.1.ps
 
 cleanzip:
 	-rm -f $(DIR).zip

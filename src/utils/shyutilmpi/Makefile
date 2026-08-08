@@ -34,6 +34,7 @@ FFLAGS += $(INCLUDE)
 MOD  = \
 
 OBJ  = \
+	info_output.o \
 	topo_update.o \
 	bnd_admin.o \
 	depth_util.o \
@@ -43,7 +44,6 @@ OBJ  = \
 	coordinates.o \
 	io_off.o \
 	trace_point.o \
-	info_output.o \
 	mod_restart.o \
 
 OBSOLETE = \
@@ -88,7 +88,7 @@ LIBLMP  = -L$(LIBDIR) -l$(LIBSHYMPI)
 LIBFMP  = $(LIBDIR)/lib$(LIBSHYMPI).a
 
 LIBL = $(LIBLMP) $(LIBLSU) $(LIBLUT)
-LIBF = $(LIBLMP) $(LIBFSU) $(LIBFUT)
+LIBF = $(LIBFMP) $(LIBFSU) $(LIBFUT)
 
 #--------------------------------------------- test compile
 
@@ -102,6 +102,10 @@ main_dummy:
 	@./main_dummy
 	@-rm -f main_dummy main_dummy.f90 main_dummy.o
 
+test_iff: test_iff.o lib
+	$(F77) $(FFLAGS) -c $@.f90 
+	$(F77) $(FFLAGS) $(INCLUDE) $(LFLAGS) $(ALL) $(LIBL) $@.o -o $@
+
 #--------------------------------------------- clean
 
 cleanall: clean cleanlib
@@ -114,7 +118,7 @@ cleanobj:
 	-rm -f *_genmod.f90
 
 cleanvar:
-	-rm -f main_dummy main_dummy.f90
+	-rm -f main_dummy main_dummy.f90 test_iff
 	-rm -f a.out core
 	-rm -f *.bak *.tmp
 	-rm -f ggg hhh
@@ -174,20 +178,26 @@ zip:	cleanall
 ../../../lib/mod/shyutil.mod: shy_util1.o
 bnd_admin.o: ../../../lib/mod/mod_bnd.mod \
 		../../../lib/mod/mod_bound_geom.mod \
+		../../../lib/mod/mod_info_output.mod \
 		../../../lib/mod/nls.mod ../../../lib/mod/para.mod \
 		../../../lib/mod/shympi.mod 
 coordinates.o: ../../../lib/mod/basin.mod \
+		../../../lib/mod/mod_info_output.mod \
 		../../../lib/mod/shympi.mod 
 depth_util.o: ../../../lib/mod/basin.mod \
 		../../../lib/mod/mod_depth.mod \
+		../../../lib/mod/mod_info_output.mod \
 		../../../lib/mod/shympi.mod 
-info_output.o: ../../../lib/mod/shympi.mod
-intp_fem_file.o: ../../../lib/mod/shympi.mod
+info_output.o: ../../../lib/mod/mod_shyfem.mod \
+		../../../lib/mod/shympi.mod 
+intp_fem_file.o: ../../../lib/mod/mod_info_output.mod \
+		../../../lib/mod/shympi.mod 
 io_off.o: ../../../lib/mod/basin.mod \
 		../../../lib/mod/mod_trace_point.mod \
 		../../../lib/mod/shympi.mod 
 mod_restart.o: ../../../lib/mod/shympi.mod
 shy_util.o: ../../../lib/mod/basin.mod ../../../lib/mod/levels.mod \
+		../../../lib/mod/mod_info_output.mod \
 		../../../lib/mod/mod_trace_point.mod \
 		../../../lib/mod/shyfile.mod \
 		../../../lib/mod/shympi.mod \
@@ -197,6 +207,7 @@ shy_util1.o: ../../../lib/mod/basin.mod \
 		../../../lib/mod/levels.mod \
 		../../../lib/mod/mod_depth.mod \
 		../../../lib/mod/mod_sort.mod 
+test_iff.o: ../../../lib/mod/intp_fem_file.mod
 topo_update.o: ../../../lib/mod/basin.mod \
 		../../../lib/mod/evgeom.mod \
 		../../../lib/mod/mod_geom.mod \

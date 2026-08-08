@@ -111,6 +111,16 @@
 ! 05.06.2023    lrp     introduce z-star
 ! 08.03.2024    ccf     changed error message for too many files opened
 ! 07.02.2025    ggu     remember vconst as default value
+! 04.11.2025    ggu     new routine iff_at_eof()
+! 06.11.2025    ggu     changed initialization routine for time series
+! 06.11.2025    ggu     new routine iff_is_global_initialized()
+! 06.11.2025    ggu     new routine iff_file_has_data()
+! 06.11.2025    ggu     new routine iff_init_global_simplified()
+! 06.11.2025    ggu     introduced boriginal
+! 07.11.2025    ggu     set time array out of iff_space_interpolate()
+! 10.11.2025    ggu     introduced iuout, better info writing
+! 08.05.2026    ggu     new routine iff_ts_has_data()
+! 29.05.2026    ggu     bug fix in iff_file_has_data() (bok not set)
 !
 !****************************************************************
 !
@@ -219,6 +229,7 @@
 	end type info
 
 	logical, parameter :: bassert = .true.
+	logical, parameter :: boriginal = .false.	!just for check
 
 	integer, parameter :: iform_none = -1
 	integer, parameter :: iform_closed = -2
@@ -251,9 +262,21 @@
 	integer, parameter :: iflow = 0			!unit for flow output
 	logical, save :: bflow = (iflow/=0)		!traces flow of calls
 
+        integer, save :: iuout = 0              !unit for info output (0->6)
+
 !================================================================
 	contains
 !================================================================
+
+	subroutine iff_set_info_unit(iunit)
+
+        integer iunit
+
+        iuout = iunit
+
+        end subroutine iff_set_info_unit
+
+!****************************************************************
 
 	subroutine iff_print_info(idp,iunit,bdebug)
 
@@ -263,6 +286,8 @@
 
 	integer id,ids,ide,iu
 	logical debug
+	logical, parameter :: bfemdata = .false.
+	logical, parameter :: bfiledata = .true.
 	integer ilast,ifirst
 	integer, parameter :: name_length = 37
 	character(len=name_length) :: name
@@ -270,10 +295,16 @@
 
 	type(info), pointer :: p
 
-	iu = 6
+        if( iuout > 0 ) then
+          iu = iuout
+          debug = .true.
+        else
+          iu = 6
+          debug = .false.
+        end if
+
 	if( present(iunit) ) iu = iunit
 	if( iu <= 0 ) iu = 6
-	debug = .false.
 	if( present(bdebug) ) debug = bdebug
 
 	if( idp <= 0 ) then
@@ -302,27 +333,30 @@
       &			,descrp(1:10),trim(name)
 	end do
 
-	if( .not. debug ) return
+	if( .not. debug .or. idp <= 0 ) return
 
-	write(iu,*) 'debug information:'
+	write(iu,*) 'debug information: ',idp,ids,ide
+
 	do id=ids,ide
+	  p => pinfo(id)
 	  write(iu,*) id,pinfo(id)%nvers,pinfo(id)%ntype,pinfo(id)%irec
 	  write(iu,*) id,pinfo(id)%np,pinfo(id)%lmax,pinfo(id)%nexp
 	  write(iu,*) id,pinfo(id)%ilast,pinfo(id)%bonepoint
 	  write(iu,*) id,pinfo(id)%bfemdata,pinfo(id)%bfiledata
+	  write(iu,*) id,pinfo(id)%vconst
 	  !write(iu,*) 11,id,pinfo(id)%time_file
 	  !write(iu,*) 12,id,pinfo(id)%time
-	  if( pinfo(id)%bfemdata ) then
+	  if( bfemdata .and. pinfo(id)%bfemdata ) then
 	  write(iu,*) id,'fem variables: nodes,time,data'
-	  write(iu,*) id,pinfo(id)%nodes
+          if( allocated(pinfo(id)%nodes)) write(iu,*) id,pinfo(id)%nodes
 	  write(iu,*) id,pinfo(id)%time
 	  write(iu,*) id,pinfo(id)%data
 	  end if
-	  if( pinfo(id)%bfiledata ) then
+	  if( bfiledata .and. pinfo(id)%bfiledata ) then
 	  write(iu,*) id,'file variables: hlv,time,data'
-	  write(iu,*) id,pinfo(id)%hlv_file
-	  write(iu,*) id,pinfo(id)%time_file
-	  write(iu,*) id,pinfo(id)%data_file
+          if( allocated(p%hlv_file) ) write(iu,*) id,p%hlv_file
+          write(iu,*) id,p%time_file
+          if( allocated(p%data_file) ) write(iu,*) id,p%data_file
 	  end if
 	  !write(iu,*) id,pinfo(id)%ilhkv_file
 	  !write(iu,*) id,pinfo(id)%hd_file
@@ -610,6 +644,18 @@
 
 !****************************************************************
 
+	function iff_is_global_initialized()
+
+	implicit none
+
+	logical iff_is_global_initialized
+
+	iff_is_global_initialized = ( nkn_fem > 0 )
+
+	end
+
+!****************************************************************
+
 	subroutine iff_init_global_date_internal(date,time)
 
 	integer date,time
@@ -627,6 +673,8 @@
 ! initializes file and sets up various parameters
 ! if called with dtime==-1 does not populate records
 ! this means that iff_populate_records must be called manually
+
+	use mod_info_output
 
 	double precision dtime	!initial time
 	character*(*) file	!file name
@@ -648,7 +696,7 @@
 	integer id0,ibc
 	character*80 varline
 	logical breg
-	logical bok
+	logical bok,bverb
 	logical bts,bfem,bnofile,bfile,berror,bnosuchfile,boperr
 	logical, parameter :: bdebug = .false.
 	type(info), pointer :: p
@@ -684,7 +732,8 @@
 
 	nvar_orig = nvar
 
-	call iff_get_file_info(file,.true.,np,nvar_read,ntype,iformat)
+	bverb = print_verbose_once()
+	call iff_get_file_info(file,bverb,np,nvar_read,ntype,iformat)
 
 	bnofile = iformat == iform_none			!no file given
 	bfile = .not. bnofile				!file has been given
@@ -818,13 +867,18 @@
 	if( iunit == 0 ) goto 90
 	pinfo(id)%iunit = iunit
 
-	write(6,*) 'file opened: ',id,trim(file)
+	if( bverb ) write(6,*) 'file opened: ',id,trim(file)
 
 	!---------------------------------------------------------
 	! populate data base
 	!---------------------------------------------------------
 
-	if( dtime /= -1. ) then
+	if( boriginal ) then
+	  if( dtime /= -1. ) then
+	    if( bdebug_internal ) write(6,*) 'populate... nexp = ',nexp
+	    call iff_populate_records(id,dtime)
+	  end if
+	else
 	  if( bdebug_internal ) write(6,*) 'populate... nexp = ',nexp
 	  call iff_populate_records(id,dtime)
 	end if
@@ -985,7 +1039,8 @@
 
 	if( nvar > 0 ) then
 	  if( bverb ) then
-	    write(6,'(a,i2,a)') 'file is fem file (format=',iformat,   '): '//trim(file)
+	    write(6,'(a,i2,a)') 'file is fem file (format=',iformat &
+     &			,'): '//trim(file)
 	    !write(6,*) file(1:il)
 	  end if
 	else
@@ -1055,6 +1110,10 @@
 	integer nintp,i
 	logical bok,bts
 
+!--------------------------------------------------------
+! set up first things
+!--------------------------------------------------------
+
 	nintp = pinfo(id)%nintp
 	if( nintp < 1 ) return		!no file
 
@@ -1062,17 +1121,33 @@
 	  write(iflow,*) 'iff: iff_populate_records: ',id,dtime0
 	end if
 
+!--------------------------------------------------------
+! check if there is at least one record in the file
+!--------------------------------------------------------
+
         if( .not. iff_read_next_record(id,dtime) ) goto 99
 	dtimefirst = dtime
 
 	!call iff_debug(id,dtime0,'populate_records start')
 
+!--------------------------------------------------------
+! check if there is a second record in the file
+!--------------------------------------------------------
+
         bok = iff_peek_next_record(id,dtime2)
 
 	if( bok ) then				!at least two records
+		!--------------------------------------------------------
+		! values are not constant -> read more
+		!--------------------------------------------------------
+
 		call iff_assert(nintp > 0,'nintp<=0')
 		ddt = dtime2 - dtime		!time step of data in file
 		if( nintp /= 4 ) ddt = 0.	!only needed for cubic intp
+
+		!--------------------------------------------------------
+		! get close to the desired time without space interpolating
+		!--------------------------------------------------------
 
 	        do
 		  if( dtime0 == -1. ) exit	! no real time given
@@ -1084,23 +1159,34 @@
 		  dtimelast = dtime
 		end do
 
-		if( dtime0 /= -1. ) then
-		  if( dtime0 < dtimefirst ) goto 91
-		  if( dtime0 > dtime2 + ddt ) goto 91
+		if( boriginal ) then
+		  if( dtime0 /= -1. ) then
+		    if( dtime0 < dtimefirst ) goto 91
+		    if( dtime0 > dtime2 + ddt ) goto 91
+		  end if
 		end if
-		!write(6,*) 'populate: ',dtimefirst,dtime,dtime2,dtime0
+
+		!--------------------------------------------------------
+		! populate records and space interpolate
+		!--------------------------------------------------------
 
 		call iff_allocate_fem_data_structure(id)
 
+	  	pinfo(id)%time(1) = dtime
                 call iff_space_interpolate(id,1,dtime)
                 do i=2,nintp
                         bok = iff_read_next_record(id,dtime)
                         if( .not. bok ) goto 96
+	  		pinfo(id)%time(i) = dtime
                         call iff_space_interpolate(id,i,dtime)
                 end do
 
 		pinfo(id)%ilast = nintp
 	else					!constant field
+		!--------------------------------------------------------
+		! file contains a constant field or value
+		!--------------------------------------------------------
+
 		pinfo(id)%nintp = 0
 		pinfo(id)%ilast = 1
 		call iff_allocate_fem_data_structure(id)
@@ -1108,11 +1194,16 @@
 		  write(6,*) 'iff_populate_records'
 		  call iff_print_file_info(id)
 		end if
+	  	pinfo(id)%time(1) = dtime
                 call iff_space_interpolate(id,1,dtime)
 		call iff_close_file(id)
         end if
 		
 	!call iff_debug(id,dtime0,'populate_records end')
+
+!--------------------------------------------------------
+! end of routine
+!--------------------------------------------------------
 
 	return
    91	continue
@@ -1307,8 +1398,9 @@
 	  pinfo(id)%nvers = nvers
 	  pinfo(id)%ntype = ntype
 	  call iff_allocate_file_arrays(id,nvar,np,lmax)
-	  call fem_file_read_2header(iformat,iunit,ntype,lmax,pinfo(id)%hlv_file   &
-                           &        					,pinfo(id)%regpar,ierr)
+	  call fem_file_read_2header(iformat,iunit,ntype,lmax &
+     &					,pinfo(id)%hlv_file   &
+     &        				,pinfo(id)%regpar,ierr)
 	  if( ierr /= 0 ) goto 97
 	end if
 
@@ -1565,7 +1657,7 @@
 	bdebug = id == 5 .and. my_id == 2
 	bdebug = .false.
 
-        pinfo(id)%time(iintp) = dtime
+        !pinfo(id)%time(iintp) = dtime
 
         nintp = pinfo(id)%nintp
         nvar = pinfo(id)%nvar
@@ -2330,11 +2422,13 @@
 	! loop until time window is centered over desidered time
 	!---------------------------------------------------------
 
-	if( iff_must_read(id,t) ) then
+	if( boriginal ) then
+	 if( iff_must_read(id,t) ) then
 	  write(6,*) 'warning: reading data in iff_time_interpolate'
 	  write(6,*) 'this is a problem with OMP'
 	  stop 'error stop iff_time_interpolate: internal error (1)'
 	  !call iff_read_and_interpolate(id,t)
+	 end if
 	end if
 
 	!---------------------------------------------------------
@@ -2417,6 +2511,62 @@
 
 !****************************************************************
 
+	function iff_file_has_data(id,t)
+
+! this routine determines if data for interpolation is available
+
+	logical iff_file_has_data
+	integer id
+	double precision t		!time for which to interpolate
+
+	logical bok
+	integer ilast,ifirst,nintp
+	double precision tlast,tfirst,tt,tc
+
+        nintp = pinfo(id)%nintp
+        ilast = pinfo(id)%ilast			!index of last record
+	if( ilast <= 0 ) goto 98
+	tlast = nint(pinfo(id)%time(ilast))
+	ifirst = mod(ilast,nintp) + 1
+	tfirst = nint(pinfo(id)%time(ifirst))
+
+        iff_file_has_data = .false.
+	if( t > tlast .and. pinfo(id)%eof ) return
+	if( t < tfirst ) return
+
+	bok = .true.
+        tc = tcomp(t,nintp,ilast,pinfo(id)%time)
+
+        do while( tc < t )
+          bok = iff_read_next_record(id,tt)
+          if( .not. bok ) exit
+          if( tt <= tlast ) goto 99
+          ilast = mod(ilast,nintp) + 1
+	  pinfo(id)%time(ilast) = tt
+          call iff_space_interpolate(id,ilast,tt)
+          tc = tcomp(t,nintp,ilast,pinfo(id)%time)
+          tlast = tt
+        end do
+
+        pinfo(id)%ilast	= ilast
+	if( .not. bok ) return
+        iff_file_has_data = .true.
+
+	return
+   98	continue
+	write(6,*) 'record has not been populated with data'
+	write(6,*) 't,ilast: ',t,ilast
+	call iff_print_file_info(id)
+	stop 'error stop iff_file_has_data'
+   99   continue
+        write(6,*) 'time record not in increasing sequence'
+        write(6,*) 'it,tlast: ',tt,tlast
+        call iff_print_file_info(id)
+        stop 'error stop iff_file_has_data'
+	end function iff_file_has_data
+
+!****************************************************************
+
 	function iff_must_read(id,t)
 
 ! this routine determines if new data has to be read from file
@@ -2425,7 +2575,7 @@
 	integer id
 	double precision t		!time for which to interpolate
 
-	integer ilast,nintp
+	integer ilast,nintp,ifirst
 	double precision tc
 
         nintp = pinfo(id)%nintp
@@ -2442,10 +2592,23 @@
 	return
    98	continue
 	write(6,*) 'record has not been populated with data'
-	write(6,*) 't,itlast: ',t,ilast
+	write(6,*) 't,ilast: ',t,ilast
 	call iff_print_file_info(id)
 	stop 'error stop iff_must_read'
 	end function iff_must_read
+
+!****************************************************************
+
+	function iff_at_eof(id)
+
+! this routine determines if file is at eof
+
+	logical iff_at_eof
+	integer id
+
+	iff_at_eof = pinfo(id)%eof
+
+	end function iff_at_eof
 
 !****************************************************************
 
@@ -2460,7 +2623,7 @@
 
 	logical bok
 	logical bdebug
-	integer ilast,nintp
+	integer ilast,nintp,ifirst
 	double precision itlast,it
 	double precision tc		!check time
 
@@ -2488,6 +2651,7 @@
 	  if( .not. bok ) exit
 	  if( it <= itlast ) goto 99
 	  ilast = mod(ilast,nintp) + 1
+	  pinfo(id)%time(ilast) = it
 	  call iff_space_interpolate(id,ilast,it)
 	  tc = tcomp(t,nintp,ilast,pinfo(id)%time)
 	  itlast = it
@@ -2806,6 +2970,9 @@
 	if( datetime(1) > 0 .and. date_fem <= 0 ) then
 	  write(6,*) 'file has absolute date but simulation has not'
 	  write(6,*) 'please set the date variable in the STR file'
+	  write(6,*) 'datetime: ',datetime
+	  write(6,*) 'date_fem: ',date_fem
+	  write(6,*) 'time_fem: ',time_fem
 	  call iff_print_file_info(id)
 	  stop 'error stop iff_adjust_datetime: date'
 	end if
@@ -2981,18 +3148,21 @@
 
         subroutine iff_ts_init(dtime,file,nintp,nvar,id)
 
+! intiaializes time series file for reading and interpolation
+
 	use intp_fem_file
 
 ! opens and inititializes file
 
         implicit none
 
-	double precision dtime
+	double precision dtime	!initial time needed
         character*(*) file      !file name
         integer nintp           !grade of interpolation (2=linear,4=cubic)
         integer nvar            !how many vars (columns) to read/interpolate
-	integer id
+	integer id		!file id (return)
 
+	integer date
 	integer nv
 	integer nexp,lexp
 	integer nodes(1)
@@ -3001,11 +3171,18 @@
 	nexp = 1
 	lexp = 0
 	vconst = 0.
+	vconst = -999.
 	nodes = 0
 	nv = nvar
+	date = 0
 	
+	if( .not. iff_is_global_initialized() ) then
+	  call iff_init_global_simplified(date)
+	end if
+
 	call iff_init(dtime,file,nv,nexp,lexp,nintp,nodes,vconst,id)
 	call iff_set_description(id,0,'timeseries')
+	call iff_need_all_values(id,.false.)
 
 	if( nv .ne. nvar ) then
 	  write(6,*) 'nvar,nv: ',nvar,nv
@@ -3016,15 +3193,40 @@
 
 !****************************************************************
 
-        subroutine iff_ts_intp(id,dtime,values)
+	function iff_ts_has_data(id,dtime)
+
+! checks if time series file has data for time dtime
 
 	use intp_fem_file
 
 	implicit none
 
-	integer id
-	double precision dtime
-        real values(*)            !interpolated values
+	logical iff_ts_has_data		!true if file has the data
+	integer id			!file id
+	double precision dtime		!time for which data is needed
+
+	double precision dtime2
+
+	iff_ts_has_data = .true.
+        if( iff_must_read(id,dtime) ) then
+	  iff_ts_has_data = iff_peek_next_record(id,dtime2)
+	end if
+
+	end
+
+!****************************************************************
+
+        subroutine iff_ts_intp(id,dtime,values)
+
+! interpolates values in file to time dtime
+
+	use intp_fem_file
+
+	implicit none
+
+	integer id			!file id
+	double precision dtime		!time for which data is needed
+        real values(*)            	!interpolated values (return)
 
 	real valaux(1,1)
 	integer ldim,ndim,ivar,nvar,nsize
@@ -3055,6 +3257,8 @@
 !****************************************************************
 
         subroutine iff_ts_intp1(id,dtime,value)
+
+! interpolates value in file to time dtime (simple version, only on value)
 
 	use intp_fem_file
 
@@ -3193,6 +3397,28 @@
 ! utility routines
 !****************************************************************
 !****************************************************************
+!****************************************************************
+
+	subroutine iff_init_global_simplified(date)
+
+	use intp_fem_file
+
+	implicit none
+
+	integer date
+
+	real hkv(1)
+	real hev(1)
+	integer time
+
+	time = 0
+	hkv(1) = 10000.
+	hev(1) = 10000.
+
+	call iff_init_global_2d(1,1,hkv,hev,date,time)
+
+	end
+
 !****************************************************************
 
 	subroutine iff_init_global_2d(nkn,nel,hkv,hev,date,time)

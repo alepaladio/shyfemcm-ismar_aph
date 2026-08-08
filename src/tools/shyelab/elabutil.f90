@@ -91,6 +91,11 @@
 ! 05.08.2024    ggu     new option ncglobal
 ! 17.10.2024    ggu     new option percentile
 ! 24.10.2024    ggu     new option smooth
+! 01.10.2025    ggu     new option ncdate0
+! 10.10.2025    ggu     new smooth option for fem files
+! 11.11.2025    ggu     new option layer
+! 13.11.2025    ggu     new option stnames
+! 09.01.2026    ggu     new code for cover option
 !
 !************************************************************
 
@@ -121,6 +126,8 @@
 	logical, save :: bwrite			= .false.
 	logical, save :: bsdebug		= .false.
 
+	logical, save :: bverbose		= .false.	!same as bverb
+
         character*80, save :: stmin		= ' '
         character*80, save :: stmax		= ' '
 	logical, save :: binclusive		= .false.
@@ -136,6 +143,7 @@
 
 	logical, save :: bsplit			= .false.
 	logical, save :: bsplitall		= .false.
+	logical, save :: bstnames		= .false.
         character*80, save :: nodelist		= ' '
         character*80, save :: nodefile		= ' '
 
@@ -174,12 +182,16 @@
 	logical, save :: bmax			= .false.
 	logical, save :: bstd			= .false.
 	logical, save :: brms			= .false.
-	logical, save :: bsumvar		= .false.
 	double precision, save :: threshold	= flag_p
 	real, save :: fact			= 1
 	integer, save :: ifreq			= 0
 	logical, save :: b2d			= .false.
 	logical, save :: bvorticity		= .false.
+
+	logical, save :: bsumvar		= .false.
+        character*80, save :: sumvarid		= ' '
+        character*80, save :: sumvarnum		= ' '
+        integer,allocatable,save :: idsumvar(:)
 
 	real, save :: perc			= -1.		!percentile
 
@@ -190,6 +202,9 @@
         character*80, save :: ssmooth		= ' '
 	real, save :: salpha			= 0.
 	integer, save :: sloop			= 0
+
+        integer, save :: ncover			= -1
+        character*80, save :: coverfile		= ' '
 
         character*80, save :: areafile		= ' '
         character*80, save :: datefile		= ' '
@@ -206,11 +221,15 @@
         character*80, save :: sextract		= ' '
 
         character*80, save :: sncglobal		= ' '
+        character*80, save :: ncdate0		= ' '
+
+	integer, save :: layer			= 0
 
 	integer, save :: istep			= 0
 	integer, save :: avermode		= 0
 	logical, save :: bthreshold		= .false.
 
+        logical, save :: bcover			= .false.
         logical, save :: barea			= .false.
 
 	logical, save :: boutput		= .false.
@@ -369,7 +388,7 @@
         call clo_add_option('changetime difftime',0. &
      &                  ,'add difftime to time record (difftime [s])')
 
-	call clo_add_com('    time is either YYYY-MM-DD[::hh[:mm[:ss]]]')
+	call clo_add_com('    difftime is either YYYY-MM-DD[::hh[:mm[:ss]]]')
 	call clo_add_com('    or integer for relative time')
 
         call clo_add_option('rmin rec',1. &
@@ -378,6 +397,9 @@
      &                  ,'only process up to record rec')
         call clo_add_option('rfreq freq',1. &
      &                  ,'only process every freq record')
+
+        call clo_add_option('layer l',0. &
+     &                  ,'only process layer l')
 
 	call clo_add_com('    rec in rmax can be negative')
 	call clo_add_com('    this indicates rec records from the back')
@@ -422,8 +444,11 @@
 
         call clo_add_option('ncglobal file',' ' &
      &		,'file containing extra global options for netcdf files')
+        call clo_add_option('ncdate0 date',' ' &
+     &		,'sets reference date for netcdf files')
 
         call clo_add_com('    file contains lines with "key: text" information')
+        call clo_add_com('    date is YYYY[-MM[-DD[::hh[:mm[:ss]]]]]')
 
 	end subroutine elabutil_set_out_options
 
@@ -438,8 +463,10 @@
         call clo_add_option('split',.false.,'split file for variables')
 
 	if( bshowall .or. bflxfile .or. bextfile ) then
+          call clo_add_option('stnames',.false. &
+     &		,'creates time series files with station names')
           call clo_add_option('splitall',.false. &
-     &		,'splits file (EXT and FLX) for extended data')
+     &		,'splits file (FLX) for extended data')
 	end if
 
 	if( bshowall .or. binputfile ) then
@@ -488,8 +515,9 @@
      &			,'convert time column to ISO string')
           call clo_add_option('convsec',.false. &
      &			,'convert ISO time column to seconds')
-          call clo_add_option('date0',' ' &
+          call clo_add_option('date0 date',' ' &
      &			,'reference date for conversion of time column')
+          call clo_add_com('    date is YYYY[-MM[-DD[::hh[:mm[:ss]]]]]')
 	end if
 
 	end subroutine elabutil_set_extract_options
@@ -502,13 +530,19 @@
 
 	if( clo_has_option('facts') ) return
 
+        call clo_add_sep('factor and offset transformations')
         call clo_add_option('facts fstring',' ' &
      &			,'apply factors to data in data-file')
         call clo_add_option('offset ostring',' ' &
-     &			,'apply factors to data in data-file')
-        call clo_add_com('    fstring and ostring is comma' &
-     &			// ' separated factors,' &
+     &			,'apply offsets to data in data-file')
+        call clo_add_com('    fstring and ostring are comma' &
+     &			// ' separated values,' &
      &                  // ' empty for no change')
+
+	if( bfemfile ) then
+	  call clo_add_option('smooth alpha,loop',ssmooth &
+     &			,'smooths field with alpha and loop')
+	end if
 
 	end subroutine elabutil_set_facts_options
 
@@ -565,6 +599,9 @@
      &			,'substitute string description in fem-file')
         call clo_add_com('    sstring is comma separated strings,' &
      &                  //' empty for no change')
+        call clo_add_option('cover basin',' ' &
+     &			,'tries to over the basin with the fem file given')
+        call clo_add_com('    basin is either a grd or a bas file')
 
 	call elabutil_set_facts_options
 	call elabutil_set_convert_options
@@ -615,7 +652,6 @@
         call clo_add_option('max',.false.,'maximum of records')
 	call clo_add_option('std',.false.,'standard deviation of records')
         call clo_add_option('rms',.false.,'root mean square of records')
-        call clo_add_option('sumvar',.false.,'sum over variables')
 	call clo_add_option('threshold t',flag &
      &				,'compute records over threshold t')
 	call clo_add_option('percentile p',perc &
@@ -623,6 +659,14 @@
 	call clo_add_option('fact fact',1.,'multiply values by fact')
 	call clo_add_option('freq n',0. &
      &			,'frequency for aver/sum/min/max/std/rms')
+
+        call clo_add_option('sumvar',.false.,'sum over all variables')
+        call clo_add_option('sumvarid varids',' ' &
+     &				,'sum over variables with id in varids')
+        call clo_add_option('sumvarnum varnums',' ' &
+     &				,'sum over variables with num in varnums')
+        call clo_add_com('    varids and varnums are comma separated ' &
+     &				// 'lists of numbers')
 
 	call clo_add_option('2d',.false.,'average vertically to 2d field')
 	call clo_add_option('vorticity',.false. &
@@ -751,14 +795,18 @@
         call clo_get_option('rmax',rmax)
         call clo_get_option('rfreq',rfreq)
 
+        call clo_get_option('layer',layer)
+
         call clo_get_option('out',bout)
         call clo_get_option('outformat',outformat)
         call clo_get_option('catmode',catmode)
         call clo_get_option('ncglobal',sncglobal)
+        call clo_get_option('ncdate0',ncdate0)
 
         call clo_get_option('split',bsplit)
 	if( bshowall .or. bflxfile .or. bextfile ) then
           call clo_get_option('splitall',bsplitall)
+          call clo_get_option('stnames',bstnames)
 	end if
         call clo_get_option('checkdt',bcheckdt)
 	if( bshowall .or. binputfile ) then
@@ -792,12 +840,15 @@
           call clo_get_option('convwindsd',bconvwindsd)
           call clo_get_option('facts',factstring)
           call clo_get_option('offset',offstring)
+          call clo_get_option('cover',coverfile)
 	end if
 
-	if( bshowall .or. bfemfile .or. bshyfile .or. blgrfile ) then
+	!if( bshowall .or. bfemfile .or. bshyfile .or. blgrfile ) then
+	if( bshowall .or. bfemfile .or. bshyfile ) then
           call clo_get_option('reg',regstring)
           call clo_get_option('regexpand',regexpand)
           call clo_get_option('resample',rbounds)
+          call clo_get_option('smooth',ssmooth)
 	end if
 
 	if( bshowall .or. bshyfile ) then
@@ -810,6 +861,8 @@
           call clo_get_option('std',bstd)
           call clo_get_option('rms',brms)
           call clo_get_option('sumvar',bsumvar)
+          call clo_get_option('sumvarid',sumvarid)
+          call clo_get_option('sumvarnum',sumvarnum)
           call clo_get_option('threshold',threshold)
           call clo_get_option('fact',fact)
           call clo_get_option('freq',ifreq)
@@ -898,9 +951,13 @@
         bnodes = nodefile .ne. ' '
         bcoord = scoord .ne. ' '
 
+	bcover = ( coverfile /= ' ' )
 	barea = ( areafile /= ' ' )
 	bcheck = ( scheck /= ' ' )
 	bresample = ( rbounds /= ' ' )
+
+	if( sumvarid /= ' ') bsumvar = .true.
+	if( sumvarnum /= ' ') bsumvar = .true.
 
         boutput = bout
         boutput = boutput .or. b2d .or. bvorticity
@@ -913,6 +970,7 @@
         boutput = boutput .or. sextract /= ' '
         boutput = boutput .or. bconvwindxy .or. bconvwindsd
         boutput = boutput .or. bsmooth
+        boutput = boutput .or. bcover
 
         !btrans is added later
 	!if( bsumvar ) boutput = .false.
@@ -929,6 +987,8 @@
 	if( bwrite ) bverb = .true.
 	if( bsdebug ) bverb = .true.
 	if( bsilent ) bquiet = .true.
+
+	bverbose = bverb
 
 	if( bsplitall ) bsplit = .true.
 

@@ -154,6 +154,7 @@
 ! 21.10.2021    ggu     set rhosa to a reasonable value (was infinite) (GGUBS)
 ! 21.10.2021    ggu     in call to get_sigma_info() protect nlv
 ! 23.10.2024    ggu     module definition taken out to mod_admin.f90
+! 29.05.2026    ggu     avoid compiler warning
 ! 
 !****************************************************************************
 
@@ -610,7 +611,7 @@
 
 ! The full parameter list is reported in Table \ref{tab:table_sedcon}.
 ! An example of the settings for the |sedcon| file is given in
-! \Fig\figref{turbulence}. Please note that is not necessary to
+! \Fig\figref{sedcon}. Please note that is not necessary to
 ! define all parameters. If not defined the default value is imposed.
 ! 
 ! \begin{figure}[ht]
@@ -3036,6 +3037,7 @@
 !        -------------------------------------------------------------------
 
          gsa = 0.d0
+         gssold = 0.d0
          do is = 1,nscls
           gss = gs(is)
 	  if (is .gt. 1) then
@@ -3920,7 +3922,7 @@
 
 	call setweg(3,iw)
         call set_area
-        call setdepth(nlvdi,hdknv,hdenv,zenv,areakv)
+        call make_new_layer_depth
 
 !       ------------------------------------------------------------------
 !       Set up velocity

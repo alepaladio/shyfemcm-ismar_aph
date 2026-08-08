@@ -15,8 +15,10 @@
 #
 #---------------------------------------------------------------------
 
-FEMDIR=${SHYFEMDIR:=$HOME/shyfem}
-femanim=$FEMDIR/femanim
+FEMDIR=${SHYFEMDIR:=$HOME/shyfemcm}
+femanim=$FEMDIR/src/tools/anim
+fembin=$FEMDIR/bin
+gps=$FEMDIR/bin/gps/gps.sh
 
 #---------------------------------------------------------------------
 
@@ -49,6 +51,7 @@ FullUsage()
   echo "  -delay #         sets delay time for gif (default 10)"
   echo "  -fps #           sets frames per second for avi (default 25)"
   echo ""
+  echo "  animated gif files can be viewed with the Imagemagick program animate"
 }
 
 ErrorOption()
@@ -97,6 +100,13 @@ TestSoftware()
       echo "   renaming program is installed..."
     fi
   fi
+
+  if [ ! -x $gps ]; then
+    echo "*** cannot find gps.sh program (internal error)... aborting"
+    exit 1
+  elif [ $output = "test" ]; then
+    echo "   gps program is installed..."
+  fi
 }
 
 #---------------------------------------------------------------------
@@ -130,11 +140,15 @@ done
 
 if [ $# -gt 0 ]; then
   plotfile=$1
-  echo "filename is $plotfile"
-  echo "not yet ready to give file name"
-  echo "please use always plot.ps"
-  echo "you can do this with the command: mv $plotfile plot.ps"
-  exit 1
+  if [ $plotfile = "plot.ps" ]; then
+    :
+  else
+    echo "filename is $plotfile"
+    echo "not yet ready to give file name"
+    echo "please use always plot.ps"
+    echo "you can do this with the command: mv $plotfile plot.ps"
+    exit 1
+  fi
 else
   plotfile=plot.ps
 fi
@@ -190,7 +204,7 @@ fi
 #--------------------------- split and make eps
 
 if [ $make_eps = "YES" ]; then
-  gps -split -eps plot.ps
+  $gps -split -eps plot.ps
   rm -f plot.*.ps
 fi
 
@@ -205,9 +219,9 @@ fi
 
 if [ $make_gifs = "YES" ]; then
   if [ $dogif = "YES" ]; then
-    gps -gif plot.*.eps
+    $gps -gif plot.*.eps
   else				#go via jpg
-    gps -jpg plot.*.eps
+    $gps -jpg plot.*.eps
     for file in plot.*.jpg
     do
       name=`basename $file .jpg`
@@ -219,7 +233,7 @@ if [ $make_gifs = "YES" ]; then
 fi
 
 if [ $make_jpgs = "YES" ]; then
-  gps -jpg plot.*.eps
+  $gps -jpg plot.*.eps
 fi
 
 ######################################################

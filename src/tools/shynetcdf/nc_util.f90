@@ -40,6 +40,8 @@
 ! 22.02.2018	ggu	changed VERS_7_5_42
 ! 03.07.2018	ggu	revision control introduced
 ! 16.02.2019	ggu	changed VERS_7_5_60
+! 08.05.2026	ggu	in check_monotone() handle negative depth layers
+! 03.08.2026	ggu	handle new option clayer
 !
 !*****************************************************************
 !*****************************************************************
@@ -351,12 +353,14 @@
 !*****************************************************************
 !*****************************************************************
 
-	subroutine setup_zcoord(ncid,bverb,zcoord,nlvdim,nz,zdep,nz1,hlv)
+	subroutine setup_zcoord(ncid,bverb,bclayer,zcoord &
+     &				,nlvdim,nz,zdep,nz1,hlv)
 
 	implicit none
 
 	integer ncid
 	logical bverb
+	logical bclayer
 	character*(*) zcoord
 	integer nlvdim
 	integer nz
@@ -406,10 +410,9 @@
 
 	ndims = 1
 	call nc_get_var_data(ncid,zcoord,1,nlvdim,ndims,dims,zdep)
+	call check_monotone(nz,zdep,'checking z-coordinates')
 	hlv = zdep
 	nz1 = nz
-
-	call check_monotone(nz,zdep,'checking z-coordinates')
 
 	if( nz1 == 1 ) return	!just one layer - hlv not of concern
 	if( abs(hlv(1)) < eps ) call depth_shift_up(nz1,hlv)
@@ -417,15 +420,21 @@
 	hindex = (hlv(2)-hlv(1))/hlv(1)
 	if( hindex < 1.5 ) then
 	  bcenter = .false.
+	  if( bverb ) write(6,*) 'layer depths are given at bottom'
 	else if( hindex < 2.5 ) then
 	  bcenter = .true.
+	  if( bverb ) write(6,*) 'layer depths are given at center'
 	else
 	  write(6,*) 'cannot determine if center or bottom'
 	  write(6,*) hlv(1:max(4,nz1))
 	  stop 'error stop setup_zcoord: strange z coords'
 	end if
 
-	if( bcenter ) call depth_center_to_bottom(nz,hlv)
+	if( bverb ) then
+	  write(6,*) 'bcenter,bclayer: ',bcenter,bclayer
+	end if
+
+	if( bcenter .or. bclayer ) call depth_center_to_bottom(nz,hlv)
 
 	if( hlv(nz1) < -1. ) nz1 = nz1 - 1	!just in case
 
@@ -841,13 +850,28 @@
 	real val(n)
 	character*(*) text
 
-	logical bgrow
+	logical bgrow,bquiet
 	integer i,imin,imax
 	real dv
 
 	if( n <= 1 ) return
 
+	call nc_get_quiet(bquiet)
 	bgrow = val(2) > val(1)
+
+	if( .not. bgrow ) then
+	  if( val(n) == -1. ) then
+	    if( .not. bquiet ) then
+	      write(6,*) 'level are sigma layers... keeping them'
+	    end if
+	  else
+	    if( .not. bquiet ) then
+	      write(6,*) 'level are negative... inverting'
+	    end if
+	    val = -val
+	    bgrow = .true.
+	  end if
+	end if
 
 	do i=2,n
 	  dv = val(i) - val(i-1)

@@ -233,6 +233,7 @@
 	  stop 'error stop adjust_no_plot_area: ianopl,iadopl'
 	end if
 
+	ia = -1
 	if( iadopl >= 0 ) then
 	  ia = iadopl
 	  bset = .true.
@@ -428,7 +429,7 @@
 ! ******************************************************
 ! ******************************************************
 
-	subroutine polar2xy(n,speed,dir,uv,vv)
+	subroutine polar2xy00(n,speed,dir,uv,vv)
 
 	implicit none
 
@@ -437,9 +438,8 @@
 	real uv(n), vv(n)
 
 	integer i
-	real rad,a
-
-	rad = atan(1.) / 45.
+	real a
+	real, parameter :: rad = atan(1.) / 45.
 
 	do i=1,n
 	  a = dir(i)
@@ -818,6 +818,7 @@
 		stop 'error stop femopen: error reading hlv'
 	end if
 
+	call bash_set_regpar(regpar)	!save for later
 	call level_k2e_sh
 	call init_sigma_info(nlv,hlv)		!sets up hlv
 
@@ -851,6 +852,7 @@
 
 	use levels
 	use supout
+	use mod_bash
 
 	implicit none
 
@@ -956,7 +958,7 @@
 	  ip = min(2,ip)
 	  call fem_interpolate(nlvddi,nkn,np,ip,regpar,ilhkv &
      &					,p3read,array)
-	  regp = regpar		!save for later
+	  call bash_set_regpar(regpar)	!save for later
 	else
 	  array = p3read
 	end if

@@ -1,4 +1,4 @@
-#!/usr/bin/perl -w
+#!/usr/bin/perl -ws
 #
 # computes bias, rmse, correlation coefficient, and averages of two timeseries
 #
@@ -11,10 +11,16 @@ use lib ("$ENV{SHYFEMDIR}/lib/perl","$ENV{HOME}/shyfemcm/lib/perl");
 use date;
 use utils;
 
+$::tmin = "NO" unless $::tmin;
+$::tmax = "NO" unless $::tmax;
+$::debug = 0 unless $::debug;
+
+my $date = new date;
+$::tmin = $date->unformat_abs($::tmin) if $::tmin ne "NO";
+$::tmax = $date->unformat_abs($::tmax) if $::tmax ne "NO";
+
 my $obs = shift;
 my $sim = shift;
-
-$::debug = 0;
 
 unless( $sim ) {
   die "Usage: ./rms.pl file1.txt file2.txt\n";
@@ -24,6 +30,11 @@ unless( $sim ) {
 
 my ($tobs,$sobs) = read_ts($obs);
 my ($tsim,$ssim) = read_ts($sim);
+
+my $nobs = @$tobs;
+my $nsim = @$tsim;
+
+print STDERR "values read: $nobs $nsim\n" if $::debug;
 
 ($tobs,$sobs,$tsim,$ssim) = choose_values($tobs,$sobs,$tsim,$ssim);
 
@@ -89,6 +100,11 @@ while( 1 ) {
   #print "$n  $t1  $t2   $s1  $s2\n";
 }
 
+if( $n <= 1 ) {
+  die("cannot compute rms with n = $n\n");
+}
+#print STDERR "using data points: $n\n";
+
 my $rxy1 = $n*$xy - $x*$y;
 my $rxy2 = sqrt( $n*$x2 - $x*$x );
 my $rxy3 = sqrt( $n*$y2 - $y*$y );
@@ -97,14 +113,17 @@ my $rxy = $rxy1 / ( $rxy2 * $rxy3 );
 $bias /= $n;
 $acum /= $n;
 my $rms = sqrt( $acum );
+my $sigma = $acum - $bias*$bias;
+$sigma = sqrt($sigma);
 
 $rms = round($rms);
 $bias = round($bias);
 $rxy = round($rxy);
 $obsaver = round($obsaver);
 $simaver = round($simaver);
+$sigma = round($sigma);
 
-print "$bias   $rms   $rxy   $obsaver  $simaver\n";
+print "$bias   $rms   $rxy   $obsaver  $simaver  $sigma\n";
 
 #-------------------------------------------------------
 
@@ -123,7 +142,18 @@ sub read_ts {
     next if /^\s*#/;
     my @f = split;
     last if scalar @f == 1;
-    push(@t,$f[0]);
+
+    my $time = $f[0];
+    if( $::tmin ne "NO" ) {
+      my $t = $date->unformat_abs($time);
+      next if $t < $::tmin;
+    }
+    if( $::tmax ne "NO" ) {
+      my $t = $date->unformat_abs($time);
+      next if $t > $::tmax;
+    }
+
+    push(@t,$time);
     push(@s,$f[1]);
   }
 

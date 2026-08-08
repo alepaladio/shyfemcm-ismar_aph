@@ -88,6 +88,7 @@
 ! 12.04.2022	ggu	global bdebug and iczunit variable for debugging
 ! 22.03.2023	ggu	relax error conditions for nodes not in same domain
 ! 03.05.2023	ggu	avoid out of bound error in ckarea()
+! 16.10.2025	ggu	new routine init_friction_from_file()
 !
 !***********************************************************
 !***********************************************************
@@ -599,6 +600,8 @@
 
 	call set_chezy
 
+	call init_friction_from_file
+
 	end
 
 !***********************************************************
@@ -1026,6 +1029,7 @@
 
 	use chezy
 	use shympi
+	use mod_info_output
 
 	implicit none
 
@@ -1036,7 +1040,7 @@
 	iunit = 6
 	if( bdebug ) iunit = iczunit
 
-	if( .not. bdebug .and. .not. shympi_is_master() ) return
+	if( print_not_quiet() .or. bdebug ) then
  
         ianf=0
         if(czdum(1,0).eq.0) ianf=1
@@ -1057,6 +1061,8 @@
         end do
 
 	flush(iunit)
+
+	end if
 
 	return
  1007   format(' area,cz,cz1,cz2,k1,k2,flag : ')
@@ -1097,6 +1103,78 @@
 	iczunit = 500 + my_id
 
 	end
+
+!***********************************************************
+
+        subroutine init_friction_from_file
+
+! initialization of conz from file
+
+	use basin
+	use chezy
+	use mod_diff_visc_fric
+
+        implicit none
+
+	logical, parameter :: busedef = .false.		!use default in czdef
+	logical, parameter :: bshyout = .false.		!writes shy file
+
+        character*80 what
+        character*80 file_init
+        character*80 file
+        integer nvar
+        integer nlvddi,nlv
+	integer iczv
+	integer id
+        double precision dtime
+	real czdef
+        real val0(1)
+        real val(nkn)
+
+	real getpar
+
+	what = 'friction init'
+	file_init = 'fricin'
+        call getfnm(file_init,file)
+        if( file == ' ' ) return
+
+	iczv = nint(getpar('iczv'))
+	if( iczv > 0 ) then
+	  write(6,*) 'initializing friction values from files incompatible'
+	  write(6,*) '  with time varying friction coefficient (iczv>0)'
+	  stop 'error stop init_friction_from_file: iczv>0'
+	end if
+
+        dtime = 0.
+	nvar = 1
+        nlvddi = 1
+        nlv = 1
+        val0 = -1.
+
+	czdef = getpar('czdef')
+        if( busedef ) val0 = czdef	!set friction to default value
+
+        call tracer_file_init(what,file_init,dtime &
+     &                          ,nvar,nlvddi,nlv,nkn,val0,val)
+
+	if( any(val==-1.) ) then
+	  write(6,*) 'some nodes are not initialized with friction'
+	  write(6,*) 'probably fem file given is too small -> extend'
+	  stop 'error stop init_friction_from_file: missing values'
+	end if
+
+	call n2e2d(val,czv)	!averages nodal values to elemental values
+
+	if( bshyout ) then
+	  call shyfem_init_scalar_file('fric',1,.true.,id)
+	  call shy_write_scalar_record2d(id,dtime,61,val)
+	  call shy_close_output_file(id)
+	  !call shyfem_init_elem_file('frice',1,.true.,id)
+	  !call shy_write_elem_record2d(id,dtime,61,val)
+	  !call shy_close_output_file(id)
+	end if
+
+        end
 
 !***********************************************************
 

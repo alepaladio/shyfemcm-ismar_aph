@@ -111,7 +111,11 @@
 !
 ! notes :
 !
+! to produce the files for the box model:
+!
+! copy boxes.txt to the simulation directory
 ! insert parameters idtbox and itmbox into STR file to have box file written
+! save files boxes_*.txt to a different directory after simulation run
 !
 ! for format of written files please see box_write_*()
 ! all other information is contained in boxfile (normally boxes.txt)
@@ -119,7 +123,9 @@
 !
 ! still to check: some sections have more layers than adjacent boxes
 !
-! in order to plot boxes set bbox=.true. in plobas (supsim.f)
+! in order to plot boxes insert ibox=1 in apnbath.str file and run 
+! shyplot outboxes.grd apnbath.str
+! (apnbath is the str file for plotting, it can have any name)
 !
 ! still to do
 !
@@ -132,7 +138,7 @@
 !            they are changed into internal numbers in box_init
 !            just after reading the sections
 !
-! versions :
+! versions (nversbox) of written files:
 !
 ! 1		first version 
 ! 2		fairly standard old version
@@ -144,6 +150,10 @@
 ! 6		in 3d file also write act_eta and bstress
 !		in sections block write section number
 ! 7		in 3d/vertical box section write also nvars2d (3/0)
+!
+! version of boxes.txt:
+!
+! 3		only allowed version
 !
 !******************************************************************
 !
@@ -984,6 +994,7 @@
 	use basin
 	use box
 	use shympi
+	use mod_info_output
 
 	implicit none
 
@@ -1005,7 +1016,9 @@
 	iudeb = 666
 	iudeb = 0
 
+	if( print_not_quiet_once() ) then
 	write(6,*) 'start reading boxfile... ',trim(boxfile)
+	end if
 	if( iudeb > 0 ) write(iudeb,*) 'reading boxfile'
 	open(1,file=boxfile,form='formatted',status='old',err=94)
 
@@ -1058,12 +1071,14 @@
 	!kfluxm = kfluxm - 1		!we keep last 0
 	kflux_ext = kflux
 
+	if( print_not_quiet_once() ) then
 	write(6,*) 'finished reading boxfile: ',trim(boxfile)
 	write(6,*) '  boxes    = ',nbox
 	write(6,*) '  sections = ',nsect
 	write(6,*) '  nodes    = ',kfluxm
 	write(6,*) '  sdim     = ',nscboxdim
 	write(6,*) '  ndim     = ',nfxboxdim
+	end if
 	!write(6,*) kflux(1:kfluxm)
 
 	if( iudeb == 0 ) return
@@ -1151,6 +1166,7 @@
 ! is -1 if node belongs to more than one box
 
 	use basin
+	use mod_info_output
 	!use box
 
 	implicit none
@@ -1190,7 +1206,9 @@
 	  stop 'error stop box_elab: internal error'
 	end if
 
+	if( print_verbose_once() ) then
 	write(6,*) 'box nodes: ',nb,nl,nb+nl,nkn
+	end if
 
 	end
 
@@ -1496,7 +1514,6 @@
  2000	  format(i10,e16.8,f12.4)
  2100	  format(2i10,e16.8,f12.4)
 	end do
-	write(6,*) 'total area: ',areatot
 
 	if( bw ) close(iu)
 
@@ -3054,6 +3071,7 @@
 	bdebug = .false.
 	bdebug = .true.
 	bcheck = .true.
+	bcheck = .false.
 	bw = ( my_id == 0 )
 	bcheck = bcheck .and. bw
 
@@ -3494,6 +3512,7 @@
 
 	if( my_id /= 0 ) return
 
+	iu = 1
 	open(iu,file='boxes_matrix.txt',status='unknown',form='formatted')
 
 	write(iu,1000) 0,header(:)

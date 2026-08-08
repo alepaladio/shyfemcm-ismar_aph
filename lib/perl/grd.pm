@@ -31,6 +31,7 @@
 # 07.01.2022	ggu	routine to return info on total node/elem/line numbers
 # 20.02.2022	ggu	new routine make_connection()
 # 31.01.2023	ggu	new routines to compute total items
+# 08.05.2026	ggu	new routine is_latlon()
 #
 ##############################################################
 #
@@ -534,6 +535,17 @@ sub adjust_max_lines
     my ($self) = @_;
 
     $self->{nlmax} = $self->adjust_nmax($self->get_lines());
+}
+
+sub get_max
+{
+    my ($self,$what) = @_;
+
+    if( $what eq "node" ) {
+      return $self->{nnmax};
+    } else {
+      die "*** get_max: what not recognized: $what\n";
+    }
 }
 
 ###############################################################################
@@ -1231,16 +1243,19 @@ sub delete_unused
 {
     my ($self) = @_;
 
-    print STDERR "deleting unused nodes...\n";
+    my $not_used = 0;
 
     $self->make_used();
 
     my $nodes = $self->{nodes};
     foreach my $node (values %$nodes) {
       unless( $node->{used} ) {
+        $not_used++;
         $self->delete_node($node);
       }
     }
+
+    print STDERR "deleting $not_used unused nodes...\n" if $not_used;
 }
 
 sub make_used
@@ -1371,6 +1386,21 @@ sub make_connection
 }
 
 ###################################
+
+sub is_latlon
+{
+    my ($self) = @_;
+
+    my ($xmin,$ymin,$xmax,$ymax) = $self->get_xy_minmax();
+
+    if( $xmin < -360 or $xmax > 360 or $ymin < -90 or $ymax > 90 ) {
+      $self->{latlon} = 0;
+    } else {
+      $self->{latlon} = 1;
+    }
+
+    return $self->{latlon};
+}
 
 sub set_latlon	#must be called after nodes have been read
 {

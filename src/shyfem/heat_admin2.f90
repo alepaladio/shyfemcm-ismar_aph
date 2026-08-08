@@ -99,6 +99,8 @@
 ! 13.09.2024    lrp     iatm and coupling with atmospheric model
 ! 21.09.2024    ggu     new handle_skin() for handling skin temperature output
 ! 08.02.2025    ggu     some new debug code
+! 08.05.2026    ggu     introduced minimum depth hm_min for heat computation
+! 09.05.2026    ggu     more debug code, bhandle to decide if use heat flux
 !
 ! notes :
 !
@@ -182,6 +184,8 @@
         use mod_hydro_print  
 	use heat_const
 	use meteo_forcing_module, only : iatm
+	use mod_info_output
+	use shympi
 
 	implicit none
 
@@ -193,14 +197,14 @@
 	double precision dq	!total energy introduced [(W/m**2)*dt*area = J]
 
         logical byes
-        logical buseice,bicecover
+        logical buseice,bicecover,bshallow,bdry,bhandle
         integer levdbg,iud,ksd,ksd1,iudbg
 	integer k,kext,kssalt
 	integer l,lmax,lmin,kspec,ilist
 	integer mode
 	integer days,im,ih
 	integer ys(8)
-	real hm,sm,tm,tnew
+	real hm,sm,tm,tnew,hm1
 	real salt,tfreeze
 	real albedo
 	real adecay,qsbottom
@@ -219,6 +223,7 @@
 	real tice,u,v,uv
 
 	real, parameter :: epsice = 1.e-5
+	real, parameter :: hm_min = 0.05
 
 	double precision ddq
 	double precision atime
@@ -266,6 +271,7 @@
 	integer, save :: kdebug = 0		!debug for this node
 	integer, save :: kspecial = 0		!special output for this node
 	logical, save :: bdebug = .false.
+	logical, save :: bfluxdebug = .true.
 	logical, save :: baverevap = .false.
 	logical, save :: bwind = .false.
 	logical, save :: bice = .false.
@@ -276,6 +282,10 @@
 !---------------------------------------------------------
 ! start of routine
 !---------------------------------------------------------
+
+	ksd = 4279
+	ksd = 0
+	ksd1 = 0
 
 	dq = 0.
 	if( icall < 0 ) return
@@ -313,7 +323,7 @@
 	  call shyice_is_active(bice)		!ice model is active
 	  bheat = iheat > 0			!we have to compute heat fluxes
 	  batm = iatm > 0			!have ocean-atmosphere coupling
-	  call qflux_compute(bqflux)		!have qflux file
+	  call qflux_compute(bqflux)		!has qflux file?
 
 	  if( .not. bqflux .and. .not. batm ) icall = -1
 	  if( .not. bheat .and. .not. bice ) icall = -1
@@ -325,9 +335,11 @@
 	  if( icall < 0 ) return
 
 !$OMP CRITICAL
+	  if( print_verbose_once() ) then
 	  write(6,*) 'qflux3d routines are active'
 	  write(6,*) 'qflux3d: bqflux,bheat,bice: ',bqflux,bheat,bice
 	  write(6,*) 'qflux3d: iheat,hdecay,botabs: ',iheat,hdecay,botabs  
+	  end if
 !$OMP END CRITICAL
 
 	  allocate(dtw(nkn))
@@ -342,8 +354,10 @@
 	  bwind = itdrag .eq. 4
           if ( bwind ) then   
             if ( iheat .eq. 6 .or. iheat .eq. 8 ) then   
+	      if( print_verbose_once() ) then
               write(6,*) 'itdrag = ',itdrag
               write(6,*) 'iheat = ',iheat
+	      end if
             else
               write(6,*) 'Erroneous value for itdrag = ',itdrag
               write(6,*) 'Use itdrag = 4 only with iheat = 6 or 8'
@@ -357,7 +371,6 @@
 
           levdbg = nint(getpar('levdbg'))
 	  bdebug = levdbg .ge. 2 
-
 	end if
 
 	icall = icall + 1
@@ -409,11 +422,6 @@
 	  lmax = ilhkv(k)
 	  lmin = jlhkv(k)
 
-	  if( kssalt > 0 .and. saltv(1,k) > 50. ) then
-	    if( ilist == 0 ) write(167,*) aline
-	    ilist = ilist + 1
-	    write(167,*) ilist,k,kext,is_dry_node(k),saltv(1,k)
-	  end if
 	  if( kext == kssalt .and. saltv(1,k) > 50. ) then
 	    iudbg = 170
 	    call check_set_unit(iudbg)
@@ -421,11 +429,17 @@
 	    call check_elems_around_node(k)
 	  end if
 
+	  hm1   = depnode(lmin,k,mode)	!depth of first layer
+	  bshallow = .false.
+	  bdry = .false.
+	  bhandle = .true.		!work with heat fluxes
+
 	  if (is_dry_node(k)) then	!do not compute if node is dry
-	    dtw(k)   = 0.
-	    tws(k)   = temp(lmin,k)
-	    evapv(k) = 0.
-	    cycle
+	    bdry = .true.
+	    bhandle = .false.
+	  else if( hm1 < hm_min ) then	!do not compute if node is too shallow
+	    bshallow = .true.
+	    bhandle = .false.
 	  end if
 
 	  tm = temp(lmin,k)
@@ -488,7 +502,7 @@
             uub = uprv(lmin,k)  
             vvb = vprv(lmin,k)  
 	    call meteo_get_heat_extra(k,dp,uuw,vvw)
-       call heatmfsbulk(days,im,ih,ddlon,ddlat,ta,p,uuw,vvw,dp,          &
+            call heatmfsbulk(days,im,ih,ddlon,ddlat,ta,p,uuw,vvw,dp, &
            &                   cc,tm,uub,vvb,qsens,qlat,qlong,evap,qswa,cd)   
             qss= fice_free*qswa  !albedo (monthly) already in qshort1 -> qswa  
             if ( bwind ) windcd(k) = cd   
@@ -535,22 +549,22 @@
           ! debug output
           !------------------------------------------------
 
-	  ksd1 = 877
-	  ksd = 1461
-	  ksd1 = 0
-	  ksd = 0
           if( kext == ksd .or. kext == ksd1 ) then
-            iud = 667
+            iud = 667 + my_id
             write(iud,*) '-------------------------'
             write(iud,*) atime
             write(iud,*) aline
-            write(iud,*) k,kext
-            write(iud,*) fice_cover,qice,aice,cice
-            write(iud,*) fice_free,fice_pen
+            write(iud,*) k,kext,lmax
+            !write(iud,*) fice_cover,qice,aice,cice
+            !write(iud,*) fice_free,fice_pen
+            !write(iud,*) tm,tice,uv,qice
             write(iud,*) qlong,qlat,qsens,qss
-            write(iud,*) tm,tice,uv,qice
+            write(iud,*) qrad,qsolar,qrad+qsolar
+            write(iud,*) bdry,bshallow,bhandle
+            write(iud,*) hm1
             write(iud,*) tm
             write(iud,*) '-------------------------'
+	    flush(iud)
           end if
 
 	  !------------------------------------------------
@@ -558,6 +572,7 @@
 	  !------------------------------------------------
 
 	  qsurface = qrad
+	  qsbottom = 0.
 
           do l=lmin,lmax
 	    if( .not. bheat ) cycle	!no heat flux computed
@@ -582,7 +597,10 @@
               stop 'error stop qflux3d: isolp'
             end if
 	    if( abs(qsurface) > 100000. ) goto 99
-            call heat2t(dt,hm,qss-qsbottom,qsurface,tm,tnew)
+	    tnew = tm
+            if( bhandle ) then
+	      call heat2t(dt,hm,qss-qsbottom,qsurface,tm,tnew)
+	    end if
             if (bdebug) call check_heat2(k,l,qss,qsbottom,qsurface,     &
            &                                   albedo,tm,tnew)
             tnew = max(tnew,tfreeze)
@@ -590,6 +608,12 @@
             albedo = 0.
             qsurface = 0.	!different from 0 only in first layer
             qss = qsbottom
+          if( kext == ksd .or. kext == ksd1 ) then
+            iud = 667 + my_id
+            write(iud,*) '-------------------------'
+	    write(iud,*) tm,tnew
+            write(iud,*) '-------------------------'
+	  end if
           end do
 
 	  if( k == kspecial ) then
@@ -601,7 +625,7 @@
 !         ---------------------------------------------------------
 
 	  tm   = temp(lmin,k)
-	  hb   = depnode(lmin,k,mode) * 0.5
+	  hb   = hm1 * 0.5
           usw  = max(1.e-5, sqrt(sqrt(tauxnv(k)**2 + tauynv(k)**2)))
 	  call tw_skin(qss,qrad,tm,hb,usw,dt,dtw(k),tws(k))
 
@@ -611,7 +635,7 @@
 
 	  if( k == kdebug ) write(444,*) icall,bice,bicecover,buseice
 	  if( bice ) then
-            hm = depnode(lmin,k,mode)
+            hm = hm1
             tm = temp(lmin,k)
             sm = saltv(lmin,k)
 	    call get_pe_values(k,r,e,eeff)
@@ -634,10 +658,21 @@
 
 	  evap = evap / rhow			!evaporation in m/s
 	  evapv(k) = evap			!positive if loosing mass
+	  qsensv(k) = qsens
+	  qlatv(k) = qlat
+	  qlongv(k) = qlong
+
+	  if( .not. bhandle ) then
+	    dtw(k)   = 0.
+	    tws(k)   = temp(lmin,k)
+	    evapv(k) = 0.
+	  end if
 
           ddq = ddq + qtot * dt * area
 
-	end do
+	end do		!loop over k
+
+	if( bfluxdebug ) call debug_fluxes(aline)
 
 	dq = ddq
 
@@ -649,6 +684,7 @@
 	  call aver_nodal(evapv,evaver)	!in evaver is average of evaporation m/s
 	  write(678,*) dtime,evaver
 	end if
+
 
 !---------------------------------------------------------
 ! skin temperature and special output
@@ -678,14 +714,21 @@
 	stop 'error stop qflux3d: impossible value for cice'
    99	continue
 	write(6,*) 'error in heat flux'
-	write(6,*) 'k',k,ipext(k),iheat
-	write(6,*) 'l',l,lmin,lmax,hm
-	write(6,*) 'qurf',qsurface,qrad
-	write(6,*) 'qlong',qlong,qlat,qsens,qss
+        write(6,*) atime
+        write(6,*) aline
+	write(6,*) 'iheat',iheat
+	write(6,*) 'k',k,ipext(k)
+	write(6,*) 'l,lmin,lmax',l,lmin,lmax
+        write(6,*) bdry,bshallow,bhandle
+	write(6,*) 'hm1',hm1
+	write(6,*) 'qsurface,qrad',qsurface,qrad
+	write(6,*) 'qlong,qlat,qsens',qlong,qlat,qsens
+	write(6,*) 'qsolar,qtot',qsolar,qtot
 	write(6,*) 'qice',qsens_orig,qice
 	write(6,*) 'fice',fice_free,fice_cover
-	write(6,*) 'ta',ta,p,uw,ur,cc
-	write(6,*) 'tm',tm,tws(k),r
+	write(6,*) 'rain',r
+	write(6,*) 'ta,p,uw,ur,cc',ta,p,uw,ur,cc
+	write(6,*) 'tm,tws,',tm,tws(k)
 	flush(6)
 	stop 'error stop qflux3d: impossible heat flux'
 	end
@@ -827,6 +870,49 @@
           call shy_sync(id)
         end if
 
+	end
+
+!*****************************************************************************
+
+	subroutine debug_fluxes(aline)
+
+	use mod_meteo
+
+	implicit none
+
+	character*20 aline
+
+	integer, save :: icall = 0
+	integer, save :: k1,k2
+	integer k
+
+	integer ipint
+
+	return
+
+	if( icall == 0 ) then
+          k = 10337
+          k = ipint(k)
+          if( k <= 0 ) stop 'error k1'
+          k1 = k
+
+	  k = 8636
+          k = ipint(k)
+          if( k <= 0 ) stop 'error k2'
+          k2 = k
+        end if
+
+	icall = icall + 1
+
+	k = k1
+	write(661,1000) aline,evapv(k),qsensv(k),qlatv(k),qlongv(k)
+	k = k2
+	write(662,1000) aline,evapv(k),qsensv(k),qlatv(k),qlongv(k)
+	flush(661)
+	flush(662)
+
+	return
+ 1000	format(a20,6f10.2)
 	end
 
 !*****************************************************************************

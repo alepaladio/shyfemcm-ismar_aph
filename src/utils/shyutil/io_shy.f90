@@ -67,6 +67,10 @@
 ! 25.11.2024    ggu     can use shy_[sg]et_simpar() with flexible nsimpar
 ! 04.12.2024    ggu     new routine shy_get_status()
 ! 10.04.2025    ggu     new nfix introduced for fixed vertical structure
+! 03.10.2025    ggu     flush unit
+! 10.10.2025    ggu     better error message
+! 17.10.2025    ggu     include ftype == 4
+! 15.01.2026    ggu     use new version 15, better error handling
 !
 !**************************************************************
 !**************************************************************
@@ -168,7 +172,8 @@
 ! 0		no type
 ! 1		hydro record (water levels, transports)
 ! 2		scalar values on nodes
-! 3		scalar values on elements
+! 3		lagrangian file
+! 4		scalar values on elements
 !
 ! routines to write and read shy files
 !
@@ -215,6 +220,7 @@
 !	12	insert empty record after header
 !	13	new values simpar
 !	14	new nfix for fixed vertical values
+!	15	just for compatibility
 
 !==================================================================
 	module shyfile
@@ -225,7 +231,7 @@
 	integer, parameter, private :: idshy = 1617
 
 	integer, parameter, private :: minvers = 11
-	integer, parameter, private :: maxvers = 14
+	integer, parameter, private :: maxvers = 15
 
 	integer, parameter, private ::  no_type = 0
 	integer, parameter, private :: ous_type = 1
@@ -711,6 +717,8 @@
 	character*(*), optional :: text
 
 	character*80 file
+	character*80 type
+	integer ftype
 
 	!call shy_get_filename(id,file)
 
@@ -720,11 +728,24 @@
 	  write(6,*) 'information on shy file:'
 	end if
 
+	ftype = pentry(id)%ftype
+	if( ftype == 1 ) then
+	  type = '(hydro records)'
+	else if( ftype == 2 ) then
+	  type = '(scalar on nodes)'
+	else if( ftype == 3 ) then
+	  type = '(lagrangian)'
+	else if( ftype == 4 ) then
+	  type = '(scalar on elements)'
+	else
+	  type = '(unknown)'
+	end if
+
         write(6,*) 'id:       ',id
         write(6,*) 'filename: ',trim(pentry(id)%filename)
         write(6,*) 'iunit:    ',pentry(id)%iunit
         write(6,*) 'nvers:    ',pentry(id)%nvers
-        write(6,*) 'ftype:    ',pentry(id)%ftype
+        write(6,*) 'ftype:    ',pentry(id)%ftype,'  ',trim(type)
         write(6,*) 'nkn:      ',pentry(id)%nkn
         write(6,*) 'nel:      ',pentry(id)%nel
         write(6,*) 'npr:      ',pentry(id)%npr
@@ -827,9 +848,9 @@
 
 	if( ios /= 0 ) return
 	if( ntype /= idshy ) return
-	if( ftype > 2 ) return
-	
-	if( nvers .lt. minvers .or. nvers .gt. maxvers ) return
+	if( ftype == 3 ) return		!lgr
+	if( ftype > 4 ) return
+	!if( nvers .lt. minvers .or. nvers .gt. maxvers ) return
 
 	shy_is_shy_file_by_unit = .true.
 	rewind(iunit)
@@ -1274,10 +1295,21 @@
         read(iunit,iostat=ios) ntype,nvers
 	if( ios /= 0 ) return
 
-	ierr = 91
-	if( ntype /= idshy ) return
-	ierr = 92
-	if( nvers < minvers .or. nvers > maxvers ) return
+	if( ntype /= idshy ) then
+	  ierr = 91
+	  write(6,*) '*** not a shy file'
+	  write(6,*) 'should be:  ',idshy
+	  write(6,*) 'instead is: ',ntype
+	  return
+	end if
+	  
+	if( nvers < minvers .or. nvers > maxvers ) then
+	  ierr = 92
+	  write(6,*) '*** version not recognized'
+	  write(6,*) 'min/max version: ',minvers,maxvers
+	  write(6,*) 'actual version:  ',nvers
+	  return
+	end if
 	pentry(id)%nvers = nvers
 
 	ierr = 2
@@ -1415,16 +1447,23 @@
 	if( .not. pentry(id)%is_allocated ) return
 
 	read(iunit,iostat=ierr) dtime,ivar,n,m,lmax
+        !write(*,*) 'read: dtime,ivar,n,m,lmax,ierr',dtime,ivar,n,m,lmax,ierr
 	if( ierr /= 0 ) return
 
 	allocate(il(n))
 	if( belem ) then
 	  nel = pentry(id)%nel
-	  if( n /= nel ) stop 'error stop shy_read_record: n/=nel'
+	  if( n /= nel ) then
+	    write(6,*) 'n,nel: ',n,nel
+	    stop 'error stop shy_read_record: n/=nel'
+	  end if
 	  il = pentry(id)%ilhv
 	else
 	  nkn = pentry(id)%nkn
-	  if( n /= nkn ) stop 'error stop shy_read_record: n/=nkn'
+	  if( n /= nkn ) then
+	    write(6,*) 'n,nkn: ',n,nkn
+	    stop 'error stop shy_read_record: n/=nkn'
+	  end if
 	  il = pentry(id)%ilhkv
 	end if
 	if( nfix > 0 ) then
@@ -1456,7 +1495,6 @@
 
 	subroutine shy_peek_record(id,dtime,ivar,n,m,lmax,ierr)
 
-
 	integer id,ierr
 	double precision dtime
 	integer ivar
@@ -1469,6 +1507,7 @@
 	iunit = pentry(id)%iunit
 
 	read(iunit,iostat=ierr) dtime,ivar,n,m,lmax
+        !write(*,*) 'peek: dtime,ivar,n,m,lmax,ierr',dtime,ivar,n,m,lmax,ierr
 	if( ierr > 0 ) return
 	backspace(iunit,iostat=iaux)	!this should never fail
 
@@ -1599,6 +1638,8 @@
         write(iunit,err=99) pentry(id)%ilhkv
         write(iunit,err=99) 
 
+	flush(iunit)
+
 	return
    99	continue
 	ierr = 51
@@ -1673,6 +1714,8 @@
 	end if
 
 	if( b3d ) deallocate(il)
+
+	flush(iunit)
 
 	return
    99	continue

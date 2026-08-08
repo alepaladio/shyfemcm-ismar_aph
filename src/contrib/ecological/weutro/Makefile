@@ -34,6 +34,7 @@ ifeq ($(ECOLOGICAL),EUTRO)
 		weutro_shell.o \
 		weutro_ulva.o \
 		weutro_wdia.o \
+		weutro_param.o \
 
 endif
 
@@ -139,6 +140,7 @@ bio3d.o: ../../../../lib/mod/basin.mod \
 bio3d_util.o: ../../../../lib/mod/basin.mod \
 		../../../../lib/mod/levels.mod donata.h 
 weutro.o: donata.h weutro.h
+weutro_param.o: weutro.h
 weutro_sedim.o: donata.h weutro.h
 weutro_seed.o: ../../../../lib/mod/basin.mod \
 		../../../../lib/mod/levels.mod 

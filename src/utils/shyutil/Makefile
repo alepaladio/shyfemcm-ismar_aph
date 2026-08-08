@@ -72,6 +72,8 @@ OBJ  = \
 	fast_find.o \
 	quad_tree.o \
 	shyaver.o \
+	strings_bfm.o \
+	strings_cbms.o \
 
 OBJ_OBSOLETE = \
 	links.o \
@@ -216,15 +218,19 @@ fem_util.o: ../../../lib/mod/basin.mod
 find.o: ../../../lib/mod/basin.mod ../../../lib/mod/evgeom.mod \
 		../../../lib/mod/mod_geom.mod 
 grdutil.o: ../../../lib/mod/basin.mod ../../../lib/mod/grd.mod
+io_lgr.o: ../../../lib/mod/mod_lagrange.mod
 line_util.o: ../../../lib/mod/basin.mod
 lnku.o: ../../../lib/mod/basin.mod ../../../lib/mod/mod_geom.mod
 quad_tree.o: ../../../lib/mod/basin.mod ../../../lib/mod/stack.mod
 regular.o: ../../../lib/mod/basin.mod
 shyaver.o: ../../../lib/mod/basin.mod
+strings_bfm.o: ../../../lib/mod/shyfem_strings.mod
+strings_cbms.o: ../../../lib/mod/shyfem_strings.mod
 submask.o: ../../../lib/mod/basin.mod
 topological.o: ../../../lib/mod/basin.mod \
 		../../../lib/mod/mod_connect.mod \
 		../../../lib/mod/mod_geom.mod 
 zadaptutil.o: ../../../lib/mod/basin.mod \
-		../../../lib/mod/levels.mod 
+		../../../lib/mod/levels.mod \
+		../../../lib/mod/mod_shyfem.mod 
 

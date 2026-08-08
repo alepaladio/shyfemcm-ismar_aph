@@ -25,7 +25,7 @@
 
 !  description :
 ! 
-!  5 grade routines
+!  5-5 grade routines
 ! 
 !  contents :
 ! 
@@ -46,10 +46,13 @@
 !  11.10.2015	ggu	bug fix: fused node was not moved
 !  18.12.2018	ggu	changed VERS_7_5_52
 !  21.05.2019	ggu	changed VERS_7_5_62
+!  23.02.2026   ggu     checks to avoid negative areas
+!  27.02.2026   ggu     some more checks
+!  06.03.2026   ggu     completely restructured
 ! 
 ! ***********************************************************
 
-	subroutine elim5
+	subroutine elim_5_5
 
 !  eliminates 5-5 grades
 ! 
@@ -57,27 +60,44 @@
 !  the two elements attached to these nodes are deleted
 
 	use mod_adj_grade
+        use mod_progress_bar
 	use basin
 
 	implicit none
 
         integer k,n
+	integer itot,ielim
+	logical bok,bprog
+	real perc
 
-        write(6,*) 'eliminating grades for grade 5... '
+        bprog = bquiet .and. .not. bsilent
+        bprog = .not. bverbose .and. .not. bsilent
+
+        if( .not. bquiet ) write(6,*) 'eliminating 5 grades...'
+	if( bprog ) call progress_bar_init('elim5')
+
+	ielim = 0
+	itot = 0
 
         do k=1,nkn
+          perc = k/float(nkn)
+          if( bprog ) call progress_bar_print(k,nkn)
           n = ngrade(k)
           if( n .eq. 5 .and. nbound(k) .eq. 0 ) then
-            call elim55(k)
-	    !call chkgrd('checking in 5 grade')
-          end if
+            call elim55(k,bok)
+	    itot = itot + 1
+	    if( bok ) ielim = ielim + 1
+	  end if
         end do
+
+	if( bprog ) call progress_bar_finalize
+	if( .not. bsilent ) write(6,*) 'nodes eliminated: ',ielim,' of ',itot
 
 	end
 
 ! ***********************************************************
 
-	subroutine elim55(k)
+	subroutine elim55(k,bok)
 
 !  eliminates 5-5 connections
 
@@ -87,24 +107,28 @@
 	implicit none
 
 	integer k
+	logical bok
 
-	logical bdebug
-        integer n,i,nc,nmax,ii,ks
+	logical berr
+        integer n,i,nc,nmax,ii,ks,nks
 	integer ie1,ie2
 	integer ip1,ip2
 	integer np,nt,nn
 	integer nval,ip
+	integer ipos,ng,nb
+	real amax
 	integer ngav(0:ngrdi+1)
 	integer ngrv(0:ngrdi+1)
 	integer nbav(0:ngrdi+1)
+	integer naux(0:ngrdi+1)
 	integer iplist(ngrdi)
 
 	integer ifindel
 
-	if( k .gt. nkn ) return
+	berr = .false.
+	bok = .false.
 
-	bdebug = .true.
-	bdebug = .false.
+	if( k .gt. nkn ) return
 
 	if( bdebug ) then
 	  write(6,*) '==============================================='
@@ -114,8 +138,8 @@
 !  make circular list
 ! 
 !  ngav 	node numbers around k
-!  ngrv	grades of node numbers around k
-!  nbav	boundary  flag for nodes around k
+!  ngrv		grades of node numbers around k
+!  nbav		boundary flag for nodes around k
 
         n = ngrade(k)
 	ngav(0) = ngri(n,k)
@@ -127,8 +151,8 @@
 	do i=0,n+1
 	  ngrv(i) = ngrade(ngav(i))
 	  nbav(i) = 0
-	  if( nbound(ngav(i)) .ne. 0 ) then
-	    ngrv(i) = 6	!FIXME
+	  if( nbound(ngav(i)) .ne. 0 ) then	!boundary node
+	    ngrv(i) = 6				!fake perfect grade
 	    nbav(i) = 1
 	  end if
 	end do
@@ -157,6 +181,17 @@
 
 	if( nmax .lt. 3 ) return
 
+	if( nc > 1 ) then
+	  do i=1,nc
+	    ip = iplist(i)
+	    ks = ngav(ip)
+	    ng = ngrv(ip)
+	    nb = nbav(ip)
+	    naux(1:ng) = ngri(1:ng,ks)
+	    call check_angles(ks,ng,naux(1:n),amax,ipos)
+	  end do
+	end if
+
 	ip = 0
 	do i=1,nc
 	  ip = iplist(i)
@@ -165,15 +200,39 @@
 
 	if( i > nc ) return		!no possible node
 
-	write(6,*) k,n,nmax,nc,ip
+	call check_angles(k,n,ngav(1:n),amax,ipos)
+	if( amax > 180 ) then
+	  if( bverbose ) write(6,*) 'cannot eliminate... k angle > 180: ',k
+	  return
+	end if
 
 !  nc gives number of occurences of this value of nmax ...
 !  ip is the pointer to the node to be exchanged
-!  we know that is tis not a boundary node, so we can shift it
+!  we know that it is not a boundary node, so we can shift it
 ! 
 !  k is eliminated, ngav(ip) is retained
 
 	ks = ngav(ip)		! node to be shifted
+	nks = ngrade(ks)
+	!if( nks /= 5 ) stop 'error stop: nks/=5'
+	call check_angles(ks,nks,ngri(:,ks),amax,ipos)
+	if( amax > 180 ) then
+	  if( bverbose ) write(6,*) 'cannot eliminate... ks angle > 180',ks
+	  return
+	end if
+
+!  now we know that we can exchange
+
+	if( bverbose ) then
+	  write(6,'(a,5i10,f8.2)') ' elim5: ',k,n,nmax,nc,ip,amax
+	end if
+
+	if( berr ) then
+	  write(6,*) 'writing grid for k=2834'
+	  call plot_node(k)
+	  call plot_node(ks)
+	  call plot_nodes(2,(/k,ks/))
+	end if
 
 	if( bdebug ) then
 	    write(6,*) 'exchanging with node ... ',ks
@@ -282,8 +341,14 @@
 	  write(6,*) '==============================================='
 	end if
 
-	!call checkarea('check area after 5 elim')	!for debug
+	if( berr ) write(6,*) 'calling checkarea'
+	if( bcheck ) call checkarea(k,' ')
+	if( berr ) write(6,*) 'finished calling checkarea'
 	! should only check elements around ks -> we need element index
 
+	bok = .true.
+
 	end
+
+! ***********************************************************
 

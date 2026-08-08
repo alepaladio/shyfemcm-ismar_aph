@@ -80,6 +80,11 @@
 ! 29.09.2023    ggu     new atime0out for correct concatenating of files
 ! 17.10.2024    ggu     for shy_make_basin_aver() allow for percentile
 ! 01.04.2025    ggu     better error message
+! 03.10.2025    ggu     handle sumvar with specific vars
+! 03.10.2025    ggu     more on sumvar
+! 10.10.2025    ggu     bug fix for vorticity computation (belem was true)
+! 17.10.2025    ggu     prepared for elemental values
+! 11.11.2025    ggu     updated with layer indication
 !
 !**************************************************************
 
@@ -92,6 +97,7 @@
 	use shyutil
 	use custom_dates
 	use shy_extract
+	use mod_trace_point
 
         use basin
         use mod_depth
@@ -109,6 +115,7 @@
 	integer, allocatable :: idims(:,:)
 	integer, allocatable :: ivars(:)
 	character*80, allocatable :: strings(:)
+	character*80, allocatable :: shorts(:)
 	integer, allocatable :: il(:)
 
 	real, allocatable :: znv(:)
@@ -117,7 +124,7 @@
 	real, allocatable :: sv(:,:)
 	real, allocatable :: dv(:,:)
 
-	logical bhydro,bscalar,belem
+	logical bhydro,bscalar,belem,bselem
 	logical blastrecord,bforce,btskip
 	integer nwrite,nwtime,nread,nelab,nrec,nin,nold,ndiff
 	integer nvers
@@ -155,6 +162,8 @@
 !--------------------------------------------------------------
 ! initialize everything
 !--------------------------------------------------------------
+
+	call set_trace_point(.false.)
 
 	nread=0
 	nelab=0
@@ -235,6 +244,7 @@
 
 	bhydro = ftype == 1
 	bscalar = ftype == 2
+	bselem = ftype == 4
 
 	if( bhydro ) then		!OUS
 	  if( nvar /= 4 ) goto 71
@@ -245,6 +255,10 @@
 	  nndim = nkn
 	  allocate(il(nkn))
 	  il = ilhkv
+	else if( bselem ) then		!EOS
+	  nndim = nel
+	  allocate(il(nel))
+	  il = ilhv
 	else
 	  goto 76	!relax later
 	end if
@@ -257,7 +271,7 @@
 	allocate(cv3(nlv,nndim))
 	allocate(cv3all(nlv,nndim,0:nvar))
 	allocate(idims(4,nvar))
-        allocate(ivars(nvar),strings(nvar))
+        allocate(ivars(nvar),strings(nvar),shorts(nvar))
 	allocate(znv(nkn),uprv(nlv,nkn),vprv(nlv,nkn))
 	allocate(sv(nlv,nkn),dv(nlv,nkn))
 	if( bdiff ) then
@@ -289,13 +303,15 @@
 	call shy_peek_record(id,dtime,iaux,iaux,iaux,iaux,ierr)
 	if( ierr > 0 ) goto 99
 	if( ierr < 0 ) goto 98
-        call shy_get_string_descriptions(id,nvar,ivars,strings)
+        call shy_get_string_descriptions(id,nvar,ivars,strings,shorts)
 
 	if( bverb ) call depth_stats(nkn,nlvdi,ilhkv)
 
 	if( .not. bquiet ) then
-	  call shy_print_descriptions(nvar,ivars,strings)
+	  call shy_print_descriptions(nvar,ivars,strings,shorts)
 	end if
+
+        idims(4,:) = ivars(:)
 
 	if( binfo ) return
 
@@ -305,6 +321,8 @@
 
 	call initialize_nodes	!single node output
 	call initialize_extract(sextract)	!initialize extracting records
+
+	call initialize_sumvar(nvar,ivars)
 
 	!--------------------------------------------------------------
 	! time averaging
@@ -350,11 +368,11 @@
 
 	ftype_out = ftype
 	if( bsumvar ) then
-	  call shyelab_init_output(id,idout,ftype,1,(/10/))
+	  call shyelab_init_output(id,idout,ftype,1,(/78/))	!generic var
 	else if( binfluencemap ) then
 	  call shyelab_init_output(id,idout,ftype,1,(/75/))
 	else if( bvorticity ) then
-	  if( ftype /= 1 ) goto 70
+	  if( ftype /= 1 ) goto 70		!we need hydro file
 	  ftype_out = 2
 	  call shyelab_init_output(id,idout,ftype_out,1,(/19/))
 	else
@@ -384,7 +402,7 @@
 	 ! read new data set
 	 !--------------------------------------------------------------
 
-	 call read_records(id,dtime,bhydro,nvar,nndim,nlvdi,idims &
+	 call read_records(id,dtime,ftype,nvar,nndim,nlvdi,idims &
      &				,cv3,cv3all,ierr)
 
          if(ierr.ne.0) then	!EOF - see if we have to read another file
@@ -406,7 +424,7 @@
 	 !--------------------------------------------------------------
 
 	 if( bdiff ) then
-	   call read_records(iddiff,ddtime,bhydro,nvar,nndim,nlvdi,idims &
+	   call read_records(iddiff,ddtime,ftype,nvar,nndim,nlvdi,idims &
      &				,cv3,cv3diff,ierr)
 	   if( ierr /= 0 ) goto 62
 	   !if( dtime /= ddtime ) goto 61
@@ -471,7 +489,7 @@
 	  ivar = idims(4,iv)
 	  nn = n * m
 
-	  belem = ( bhydro .and. iv > 1 )
+	  belem = ( bhydro .and. iv > 1 .or. bselem )
 
 	  cv3(:,:) = cv3all(:,:,iv)
 
@@ -480,11 +498,11 @@
 	  end if
 
 	  if( bverb .and. iv == 1 ) then
-	    call shy_write_time(.true.,dtime,atime,0)
+	    call shy_write_time(.true.,dtime,atime,nvar,0)
 	  end if
 
 	  if( bwrite ) then
-	    call shy_write_min_max(nlvdi,nn,il,lmax,ivar,cv3)
+	    call shy_write_min_max(nlvdi,nn,il,lmax,layer,ivar,cv3)
 	  end if
 
 	  if( btrans ) then
@@ -506,11 +524,17 @@
 	  end if
 
 	  if( baverbas .and. bscalar ) then
-	    call shy_assert(nndim==nkn,'shyelab internal error (123)')
-	    call shy_make_basin_aver(idims(:,iv),nlv,nndim,cv3,ikflag,perc &
+	    if( bscalar ) then
+	      call shy_assert(nndim==nkn,'shyelab internal error (123)')
+	      call shy_make_basin_aver(idims(:,iv),nlv,nndim,cv3,ikflag,perc &
      &                          ,cmin,cmax,cmed,cstd,atot,vtot)
-	    call shy_write_aver(aline,nvar,iv,ivar &
+	      call shy_write_aver(aline,nvar,iv,ivar &
      &				,cmin,cmax,cmed,cstd,atot,vtot)
+	    else if( bselem ) then
+	      stop 'error stop shyelab1: not yet ready for ftype==4'
+	    else
+	      stop 'error stop shyelab1: cannot average'
+	    end if
 	  end if
 
 	 end do		!loop on ivar
@@ -537,6 +561,7 @@
 	 if( bvorticity ) then
            ivar = 19
 	   iv = 1
+	   belem = .false.	!vorticity is on nodes
            call compute_vorticity(nndim,cv3all,cv3)
 	   call shyelab_record_output(id,idout,dtime,ivar,iv &
      &						,belem,nkn,1 &
@@ -662,7 +687,7 @@
 	write(6,*) 'ftype = ',ftype,'  expecting 1 or 2'
 	call shy_get_filename(id,file)
 	write(6,*) 'file = ',trim(file)
-	stop 'error stop shyelab: ftype'
+	stop 'error stop shyelab: unknown ftype'
    77	continue
 	write(6,*) 'error reading header, ierr = ',ierr
 	call shy_get_filename(id,file)
@@ -889,6 +914,85 @@
 
 !***************************************************************
 !***************************************************************
+!***************************************************************
+
+	subroutine initialize_sumvar(nvar,ivars)
+
+! initialize summation over variables
+
+	use elabutil
+
+	implicit none
+
+	integer nvar
+	integer ivars(nvar)
+
+        integer i,n,id,num,iv
+        integer ntot
+        real,allocatable :: f(:)
+
+	integer iscanf
+
+        allocate(idsumvar(nvar))
+        allocate(f(nvar))
+        idsumvar = 0
+	ntot = 0
+
+        if( sumvarnum /= ' ' ) then
+          n = iscanf(sumvarnum,f,nvar)
+          if( n < 0 ) goto 99
+          ntot = ntot + n
+          do i=1,n
+            num = nint(f(i))
+	    if( num < 1 .or. num > nvar ) goto 97
+            idsumvar(num) = 1
+          end do
+        end if
+        if( sumvarid /= ' ' ) then
+          n = iscanf(sumvarid,f,nvar)
+          if( n < 0 ) goto 99
+          ntot = ntot + n
+          do i=1,n
+            id = nint(f(i))
+	    do iv=1,nvar
+	      if( ivars(iv) == id ) exit
+	    end do
+	    if( iv > nvar ) goto 98
+	    idsumvar(iv) = 1
+          end do
+        end if
+
+	!write(6,*) trim(sumvarid)
+	!write(6,*) trim(sumvarnum)
+	!do iv=1,nvar
+	!  write(6,*) iv,ivars(iv),idsumvar(iv)
+	!end do
+
+	if( bsumvar .and. ntot == 0 ) then	!summ all variables
+	  ntot = nvar
+	  idsumvar = 1
+	end if
+	if( ntot > 0 ) bsumvar = .true.
+
+	if( ntot > 0 ) then
+	  write(6,*) 'sumvar initialized - summing ',ntot,' variables'
+	end if
+
+        return
+   97   continue
+        write(6,*) 'num not in available variables: ',num
+	write(6,*) '  1 <= num <= nvar'
+        stop 'error stop handle_sumvar: id error'
+   98   continue
+        write(6,*) 'id not in available variables: ',id
+        stop 'error stop handle_sumvar: id error'
+   99   continue
+        write(6,*) 'error in list of numbers:'
+        write(6,*) 'sumvarid: ',trim(sumvarid)
+        write(6,*) 'sumvarnum: ',trim(sumvarnum)
+        stop 'error stop handle_sumvar: list error'
+	end
+
 !***************************************************************
 
 	subroutine check_diff(nlv,nn,nvar,cv3all,deps,ndiff)

@@ -64,6 +64,8 @@
  * 23.02.2010	ggu	change color table in PS file, default color table
  * 29.09.2010	ggu	new routine PsArcFill()
  * 10.07.2020	ggu	make sure file is opened (BFileOpened)
+ * 13.11.2025	ggu	new routine PsPolyPlot()
+ * 13.11.2025	ggu	new routines PsSaveColor() and PsRestoreColor()
  *
 \************************************************************************/
 
@@ -171,6 +173,11 @@ static int	ColorMode	= CMODE_GRAY;
 static int	ColorChanged	= NO;
 static int	IsWhite		= NO;
 static int	DefColorTable	= 0;
+
+static float	C1_save		= 0.;		/* gray, hue, red */
+static float	C2_save		= 0.;		/* sat, green */
+static float	C3_save		= 0.;		/* bri, blue */
+static int	ColorMode_save	= CMODE_GRAY;
 
 static int	Csize		= 0;
 static float	*CT1		= NULL;
@@ -647,6 +654,25 @@ void PsPaintWhite( int ipaint )
 	ColorChanged = YES;
 }
 
+void PsSaveColor( void )
+
+{
+	C1_save = C1;
+	C2_save = C2;
+	C3_save = C3;
+	ColorMode_save = ColorMode;
+}
+
+void PsRestoreColor( void )
+
+{
+	C1 = C1_save;
+	C1 = C2_save;
+	C1 = C3_save;
+	ColorMode = ColorMode_save;
+	ColorChanged = YES;
+}
+
 void PsInitColorTable( int size )
 
 {
@@ -1001,6 +1027,38 @@ void PsPoint( float x , float y )
     BOutSide = FALSE;
 }
 
+void PsPolyPlot( int ndim , float *x , float *y )
+
+{
+    int i;
+    int in=0;
+    float vx,vy;
+
+    if(ndim<3) return;
+
+    for(i=0;i<ndim;i++) {
+	vx = PsxWtoV(x[i]);
+	vy = PsyWtoV(y[i]);
+        if( InSide(vx,vy) ) in++;
+    }
+    if( !in ) return;
+
+    if( ISWHITE ) return;
+    PsStroke(FLUSH);
+    SETCOLOR;
+    vx = PsxWtoV(x[ndim-1]);
+    vy = PsyWtoV(y[ndim-1]);
+    fprintf(FP,"N %1.3f %1.3f M\n",vx,vy);
+    for(i=0;i<ndim;i++) {
+	vx = PsxWtoV(x[i]);
+	vy = PsyWtoV(y[i]);
+	fprintf(FP,"%1.3f %1.3f L\n",vx,vy);
+    }
+    // fprintf(FP,"CP F\n");
+    NPlot++;
+    PsStroke(APPEND);
+}
+
 void PsAreaFill( int ndim , float *x , float *y )
 
 {
@@ -1070,6 +1128,8 @@ void PsRectFill( float x1 , float y1 , float x2 , float y2 )
 	fprintf(FP,"%1.3f %1.3f %1.3f %1.3f RF\n",vh,vw,vx1,vy1);
 	NPlot++;
 }
+
+// for the arc command (PsArc, PsArcFill) the angles are in degrees
 
 void PsArc( float x0, float y0, float r, float ang1, float ang2 )
 

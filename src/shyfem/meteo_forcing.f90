@@ -111,6 +111,9 @@
 ! 13.11.2024    ggu     marked old code with INTEL_BUG_OLD
 ! 03.12.2024    lrp     new parameter irain for the coupled model
 ! 25.01.2025    ggu     tentative cubic interpolation for wind (bbspline)
+! 10.09.2025    ggu     add heat fluxes to meteo output data
+! 21.10.2025    ggu     bug in conversion of rain (BUGZCONV)
+! 08.05.2026    ggu     pop trailing "- x" and "- y" from description
 !
 ! notes :
 !
@@ -227,11 +230,18 @@
 !
 ! DOCS  END
 
+! ihtype
+!	1 = relative humidity
+!	2 = wet bublb temperature
+!	3 = dew temperature
+!	4 = specific humidity
+
 !================================================================
         module meteo_forcing_module
 !================================================================
 
 	use intp_fem_file
+	use mod_info_output
 
 	implicit none
 
@@ -266,7 +276,7 @@
 
 	logical, save :: has_pressure = .false.
 
-	logical, save, private :: bdebug = .true.
+	logical, save, private :: bdebug = .false.
 
 	integer, save, private :: icall = 0
 
@@ -328,6 +338,7 @@
 
 	logical bbspline	!interpolate wind with 4th order bspline
 	logical bbwrite		!write spline output to file fort.77
+	logical bw
 	real getpar
 
 !------------------------------------------------------------------
@@ -338,6 +349,8 @@
 	bbspline = .true.
 	bbwrite = .true.
 	bbwrite = .false.
+
+	bw = print_not_quiet_once()
 
 	batm = iatm == 1 .and. icall_nuopc == 1
 
@@ -351,7 +364,7 @@
 
 	if( icall .eq. 0 ) then
 
-	  write(6,*) 'initialization of meteo forcing fem'
+	  if( bw ) write(6,*) 'initialization of meteo forcing fem'
 
 !	  ---------------------------------------------------------
 !	  initialization of data files
@@ -368,7 +381,7 @@
 !	  initializing wind file
 !	  ---------------------------------------------------------
 
-	  write(6,'(a)') 'opening wind file...'
+	  if( bw ) write(6,'(a)') 'opening wind file...'
           nvar = 0      !not sure if 2 or 3
           call iff_get_file_nvar(windfile,nvar)
           if( nvar <= 0 ) nvar = 3      !if no file fake 3
@@ -385,7 +398,7 @@
 !	  initializing ice file
 !	  ---------------------------------------------------------
 
-	  write(6,'(a)') 'opening ice file...'
+	  if( bw ) write(6,'(a)') 'opening ice file...'
 	  nvar = 1
 	  nintp = 2
 	  what = 'ice'
@@ -404,7 +417,7 @@
 !	  initializing rain file
 !	  ---------------------------------------------------------
 
-	  write(6,'(a)') 'opening rain file...'
+	  if( bw ) write(6,'(a)') 'opening rain file...'
 	  nvar = 1
 	  nintp = 2
 	  what = 'rain'
@@ -418,7 +431,7 @@
 !	  initializing heat file
 !	  ---------------------------------------------------------
 
-	  write(6,'(a)') 'opening heat flux file...'
+	  if( bw ) write(6,'(a)') 'opening heat flux file...'
 	  nvar = 4
 	  nintp = 2
 	  what = 'heat'
@@ -538,7 +551,7 @@
 !------------------------------------------------------------------
 
 	call output_debug_data
-	call output_meteo_data
+	!call output_meteo_data
 
 	if( bextra_exchange ) then
 	  call shympi_exchange_2d_node(tauxnv)
@@ -589,18 +602,23 @@
 
 	subroutine output_meteo_data
 
+! this must be called after meteo_forcing_fem and compute_heat_flux
+! called in barocl() because only there we have all the data (and new tempv)
+!
+! bug in zconv (BUGZCONV)
+
 	use basin
 	use mod_meteo
 	use shympi
 
 	integer			:: id
 	integer			:: nvar_act
-	integer, save		:: imetout
+	integer, save		:: imetout,iheat
 	double precision 	:: dtime
 	integer, save		:: nvar = 0
 	logical, save 		:: b2d = .true.
-	logical, save		:: bwind,bheat,brain,bice
-        real, parameter		:: zconv = 86400. / 1000. !convert m/s to mm/day
+	logical, save		:: bwind,bheat,brain,bice,bhflx
+        real, parameter		:: zconv = 86400. * 1000. !convert m/s to mm/day
 	real, allocatable	:: maux(:)
 
 	logical has_output_d,next_output_d
@@ -615,20 +633,24 @@
 	  if( da_met(4) < 0 ) return
 
 	  imetout = getpar('imetout')	!what type of meteo output
+	  iheat = getpar('imetout')	!what heat flux parameterization
 	  bwind = ( bit10_extract_value(imetout,1) > 0 )
 	  bheat = ( bit10_extract_value(imetout,2) > 0 )
 	  brain = ( bit10_extract_value(imetout,3) > 0 )
 	  bice  = ( bit10_extract_value(imetout,4) > 0 )
+	  bhflx = ( bit10_extract_value(imetout,5) > 0 )
 	  bwind = bwind .and. iff_has_file(idwind)
 	  bheat = bheat .and. iff_has_file(idheat)
 	  brain = brain .and. iff_has_file(idrain)
 	  bice  = bice  .and. iff_has_file(idice)
+	  bhflx = bhflx .and. iheat > 0
 
 	  nvar = 0
 	  if( bwind ) nvar = nvar + 4
 	  if( bheat ) nvar = nvar + 4
 	  if( brain ) nvar = nvar + 1
 	  if( bice  ) nvar = nvar + 1
+	  if( bhflx ) nvar = nvar + 4
 	  if( nvar == 0 ) da_met(4) = -1
 	  if( da_met(4) < 0 ) return
 
@@ -666,6 +688,12 @@
 	if( bice ) then
           call shy_write_scalar_record2d(id,dtime,85,metice)
 	end if
+	if( bhflx ) then
+          call shy_write_scalar_record2d(id,dtime,47,qsensv)
+          call shy_write_scalar_record2d(id,dtime,48,qlatv)
+          call shy_write_scalar_record2d(id,dtime,49,qlongv)
+          call shy_write_scalar_record2d(id,dtime,27,evapv)
+	end if
 
 	call shy_get_nvar_act(id,nvar_act)
 
@@ -696,6 +724,7 @@
 	integer nvar
 
 	integer il
+	integer ind
 	character*80 string,string1,string2
 	character*10 dir,unit
 
@@ -731,6 +760,15 @@
 
 	call iff_get_var_description(id,1,string1)
 	call iff_get_var_description(id,2,string2)
+
+	!------------------------------------------
+	! pop trailing " - x" or " - y"
+	!------------------------------------------
+
+	ind = index(string1,' - ')
+	if( ind /= 0 ) string1(ind:) = ' '
+	ind = index(string2,' - ')
+	if( ind /= 0 ) string2(ind:) = ' '
 
 	if( .not. iff_has_file(id) ) then	!no wind file
 
@@ -838,6 +876,7 @@
 
         call putpar('iwtype',real(iwtype))
 
+	if( print_verbose_once() ) then
 	if( iwtype == 0 ) then
 	  write(6,*) 'no wind file opened'
 	else
@@ -851,6 +890,7 @@
 	    call iff_get_var_description(id,3,string)
 	    write(6,*) ' 3    ',trim(string)
 	  end if
+	end if
 	end if
 
 !	---------------------------------------------------------
@@ -1099,6 +1139,7 @@
 !	remember values and write to monitor
 !	---------------------------------------------------------
 
+	if( print_verbose_once() ) then
 	if( irtype == 0 ) then
 	  write(6,*) 'no rain file opened'
 	else
@@ -1106,6 +1147,7 @@
 	  call iff_get_var_description(id,1,string)
 	  write(6,*) 'content: '
 	  write(6,*) ' 1    ',string
+	end if
 	end if
 
 !	---------------------------------------------------------
@@ -1206,6 +1248,7 @@
 !	remember values and write to monitor
 !	---------------------------------------------------------
 
+	if( print_verbose_once() ) then
 	if( ictype == 0 ) then
 	  write(6,*) 'no ice file opened'
 	else
@@ -1213,6 +1256,7 @@
 	  call iff_get_var_description(id,1,string)
 	  write(6,*) 'content: '
 	  write(6,*) ' 1    ',string
+	end if
 	end if
 
 !	---------------------------------------------------------
@@ -1423,6 +1467,7 @@
 !	remember values and write to monitor
 !	---------------------------------------------------------
 
+	if( print_verbose_once() ) then
 	if( ihtype == 0 ) then
 	  write(6,*) 'no heat file opened'
 	else
@@ -1433,6 +1478,7 @@
 	    if( i == 3 ) call adjust_humidity_string(string)		!FIXME
 	    write(6,*) i,'    ',trim(string)
 	  end do
+	end if
 	end if
 
 !	---------------------------------------------------------

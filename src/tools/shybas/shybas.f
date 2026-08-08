@@ -77,6 +77,10 @@ c 29.01.2023    ggu     more on correct area computation (eliminated areatr)
 c 10.05.2024    ggu     new routine write_basin_txt() (bbastxt)
 c 03.10.2024    ggu     new call to test_fast_find()
 c 21.11.2024    ggu     renamed call to some routines
+c 18.06.2025    ggu     new option -comparebas and routine bascompare_bas()
+c 20.02.2026    ggu     better information for option -quality
+c 23.02.2026    ggu     finished option -quality
+c 19.04.2026    ggu     for info compute distmin,distmax,distaver
 c
 c todo :
 c
@@ -162,7 +166,8 @@ c-----------------------------------------------------------------
 	if( bquality ) call basqual		!grid quality
 	if( bresol ) call bas_resolution	!grid resolution
 
-	if( bcompare ) call bascompare		!compares 2 basins
+	if( bcompare ) call bascompare_depth	!compares depth of 2 basins
+	if( bcomparebas ) call bascompare_bas	!compares 2 basins
 	if( hsigma > 0 ) call bashsigma(hsigma)	!creates hybrid layers
 	if( bfile /= ' ' ) call basbathy	!interpolate bathymetry
 	if( bsmooth ) call bas_smooth		!limit and smooth
@@ -523,12 +528,13 @@ c writes statistics on basin
 	real dxmax,dymax
 	real h
         real xx,yy,dx,dy
-        real dist,distmin
+        real dist,distmin,distmax
 	logical bflag
 	real dtot,dptot
 	real hk
 	real, parameter :: hflag = -999.
-        integer i,k1,k2,km1,km2
+        integer i,k1,k2,kmin1,kmin2,kmax1,kmax2
+	double precision distaver
 
 	real area_elem
 
@@ -698,11 +704,16 @@ c-----------------------------------------------------------------
         !distmin = (xmax-xmin)**2 + (ymax-ymin)**2
 	call compute_distance(xmin,ymin,xmax,ymax,dx,dy)
         distmin = 2.*(dx**2+dy**2)
-        km1 = 0
-        km2 = 0
+        distmax = 2.*(dx**2+dy**2)
+	distaver = 0
+        kmin1 = 0
+        kmin2 = 0
+        kmax1 = 0
+        kmax2 = 0
 
 	if( bnomin ) then
 	  distmin = 0.
+	  distmax = 0.
 	else
 	  do ie=1,nel
 	    do ii=1,3
@@ -712,14 +723,25 @@ c-----------------------------------------------------------------
 	      call compute_distance(xgv(k1),ygv(k1),xgv(k2),ygv(k2),dx,dy)
               dist = dx**2 + dy**2
               if( dist .lt. distmin ) then
-                km1 = k1
-                km2 = k2
+                kmin1 = k1
+                kmin2 = k2
                 distmin = dist
               end if
+              if( dist .gt. distmax ) then
+                kmax1 = k1
+                kmax2 = k2
+                distmax = dist
+              end if
+	      distaver = distaver + dist
 	    end do
 	  end do
           distmin = sqrt(distmin)
-	  write(6,*) 'min node distance:      ',distmin,ipv(km1),ipv(km2)
+          distmax = sqrt(distmax)
+	  distaver = distaver / (3*nel)
+          distaver = sqrt(distaver)
+	  write(6,*) 'min node distance: ',distmin,ipv(kmin1),ipv(kmin2)
+	  write(6,*) 'max node distance: ',distmax,ipv(kmax1),ipv(kmax2)
+	  write(6,*) 'average distance:  ',distaver
 	end if
 
 c-----------------------------------------------------------------
@@ -1150,7 +1172,7 @@ c writes statistics on grid quality
 
 	integer ie,ii,k
 	integer ia,ic,ilow,ihigh
-	integer imin,imax
+	integer imin,imax,ifr
 	real area,amin,amax,atot
         real vtot
 	real aptot,vptot
@@ -1161,9 +1183,14 @@ c writes statistics on grid quality
         real xx,yy
         real dist,distmin
 	real fmax,fmin,a,f
+	real low,high,frmax
+	real ff(nel)
         integer i,k1,k2
-	integer iemin,iemax
+	integer iemin,iemax,ierr
+	integer kamin,kamax
+	integer icacum
 
+	integer ifrac(-5:15)
 	integer iangle(0:18)
 
 	integer ieext,ipext
@@ -1180,6 +1207,8 @@ c-----------------------------------------------------------------
 c compute fraction
 c-----------------------------------------------------------------
 
+! ideal fraction: a_node / a_elem = 2
+
 	do ie=1,nel
 	  area = 4.*ev(10,ie)
 	  do ii=1,3
@@ -1190,6 +1219,8 @@ c-----------------------------------------------------------------
 
 	fmax = 0
 	fmin = 10.
+	ierr = 0
+	ifrac = 0
 	do ie=1,nel
 	  area = 12.*ev(10,ie)
 	  amax = 0.
@@ -1198,10 +1229,11 @@ c-----------------------------------------------------------------
 	    a = areav(k)
 	    amax = max(amax,a)
 	  end do
-	  f = amax/area
-	  if( f .gt. 10. ) then
-	    write(6,*) 'bad quality of element: ',ie,ieext(ie),f
-	  end if
+	  f = (amax/area)/2.		!f == 1 is ideal
+	  ff(ie) = f
+	  ifr = f / 2.
+	  if( f < 1. ) ifr = -(1-f)*5. - 1
+	  if( ifr > 15 ) ifr = 15
 	  if( f .gt. fmax ) then
 	    fmax = f
 	    iemax = ie
@@ -1210,12 +1242,46 @@ c-----------------------------------------------------------------
 	    fmin = f
 	    iemin = ie
 	  end if
+	  ifrac(ifr) = ifrac(ifr) + 1
 	end do
 
-	write(6,*) 'Grid quality: (internal/external element number)'
+	icacum = 0
+	frmax = 0.
+	write(6,*)
+	write(6,*) 'area fraction f is defined as (a_node/a_elem)/2'
+	write(6,*)
+	write(6,*) 'distribution of area fractions f: (best is 1)'
+	write(6,*) '          from    to   count'
+	do i=-5,15
+	  ifr = i
+	  ic = ifrac(i)
+	  icacum = icacum + ic
+	  if( ifr < 0 ) then
+	    low = (5 + ifr) * 0.2
+	    high = low + 0.2
+	  else if (ifr == 0 ) then
+	    low = 1
+	    high = 2
+	  else
+	    low = i * 2
+	    high = (i+1) * 2
+	  end if
+	  write(6,'(9x,2f6.2,i8)') low,high,ic
+	  if( nel - icacum < 10 .and. frmax == 0. ) frmax = ifr * 2
+	end do
+
+	write(6,*)
+	write(6,*) 'elements with f > ',frmax
+	write(6,*) '     ie-int      ie-ext            f'
+	do ie=1,nel
+	  f = ff(ie)
+	  if( f >= frmax ) write(6,*) ie,ieext(ie),f
+	end do
+
+	write(6,*)
+	write(6,*) 'Grid quality:     ie-int      ie-ext            f'
 	write(6,*) '   minimum: ',iemin,ieext(iemin),fmin
 	write(6,*) '   maximum: ',iemax,ieext(iemax),fmax
-	write(6,*)
 
 c-----------------------------------------------------------------
 c compute angles
@@ -1225,27 +1291,56 @@ c-----------------------------------------------------------------
 	  iangle(i) = 0
 	end do
 
+	ierr = 0
+	amin = 180.
+	amax = 0.
 	do ie=1,nel
-	  !area = 4.*ev(10,ie)
 	  do ii=1,3
 	    k = nen3v(ii,ie)
 	    a = ev(10+ii,ie)
-	    ia = a / 10.
-	    if( ia .ge. 16 ) then
-		write(6,*) 'bad angle found: ',k,ipext(k),a
+	    if( a < amin ) then
+	      amin = a
+	      kamin = k
+	    else if( a > amax ) then
+	      amax = a
+	      kamax = k
 	    end if
+	    if( a > 160 ) ierr = ierr + 1
+	    ia = a / 10.
 	    iangle(ia) = iangle(ia) + 1
 	  end do
 	end do
 
+	icacum = 0
+	write(6,*)
+	write(6,*) 'distribution of angles: (best is 60)'
+	write(6,*) '          from          to       count'
 	do i=0,18
 	  ic = iangle(i)
+	  icacum = icacum + ic
 	  ilow = i * 10
 	  ihigh = (i+1) * 10
-	  write(6,*) 'angles between ',ilow,ihigh,ic
+	  write(6,*) '  ',ilow,ihigh,ic
+	end do
+
+	if( ierr > 0 ) then
+	  write(6,*)
+	  write(6,*) 'nodes with angle > 160'
+	  write(6,*) '      k-int       k-ext        angle'
+	end if
+
+	do ie=1,nel
+	  do ii=1,3
+	    k = nen3v(ii,ie)
+	    a = ev(10+ii,ie)
+	    if( a > 160 ) write(6,*) k,ipext(k),a
+	  end do
 	end do
 
 	write(6,*)
+	write(6,*) 'Angle quality:    ie-int      ie-ext        angle'
+	write(6,*) '   minimum: ',kamin,ipext(kamin),amin
+	write(6,*) '   maximum: ',kamax,ipext(kamax),amax
 
 c-----------------------------------------------------------------
 c end of routine
@@ -1380,7 +1475,7 @@ c-----------------------------------------------------------------
 
 c*******************************************************************
 
-	subroutine bascompare
+	subroutine bascompare_depth
 
 c compares two basins and writes delta depths to file
 
@@ -1400,13 +1495,13 @@ c compares two basins and writes delta depths to file
 	call clo_get_file(2,file)
 	if( file == ' ' ) then
 	  write(6,*) 'for -compare we need two bas files'
-	  stop 'error stop bascomp: missing second file'
+	  stop 'error stop bascompare_depth: missing second file'
 	end if
 	call basin_read(file)
 
 	if( nel /= nel_aux ) then
 	  write(6,*) 'dimension of basins incompatible: ',nel,nel_aux
-	  stop 'error stop bascomp: nel'
+	  stop 'error stop bascompare_depth: nel'
 	end if
 
 	!call ev_init(nel)
@@ -1418,6 +1513,100 @@ c compares two basins and writes delta depths to file
         call grd_write('bascomp.grd')
         write(6,*) 'The basin has been written to bascomp.grd'
 
+	end
+
+c*******************************************************************
+
+	subroutine bascompare_bas
+
+c compares two basins
+
+	use basin
+	use clo
+
+	implicit none
+
+	logical bequal
+	character*80 file
+	type(basin_type) :: pbasin
+
+	call basin_save_basin(pbasin)
+
+	call clo_get_file(2,file)
+	if( file == ' ' ) then
+	  write(6,*) 'for -compare we need two bas files'
+	  stop 'error stop bascompare_depth: missing second file'
+	end if
+	call basin_read(file)
+
+	write(6,*) 'comparing basins...'
+
+	bequal = .true.
+
+	if( nkn /= pbasin%nkn ) goto 99
+	if( nel /= pbasin%nel ) goto 99
+	if( ngr /= pbasin%ngr ) goto 99
+	if( mbw /= pbasin%mbw ) then
+	  bequal = .false.
+	  write(6,*) 'mbw: ',mbw,pbasin%mbw
+	end if
+
+	if( dcorbas /= pbasin%dcorbas ) then
+	  bequal = .false.
+	  write(6,*) 'dcorbas: ',dcorbas,pbasin%dcorbas
+	end if
+	if( dirnbas /= pbasin%dirnbas ) then
+	  bequal = .false.
+	  write(6,*) 'dirnbas: ',dirnbas,pbasin%dirnbas
+	end if
+	if( sphebas /= pbasin%sphebas ) then
+	  bequal = .false.
+	  write(6,*) 'sphebas: ',sphebas,pbasin%sphebas
+	end if
+	if( descrr /= pbasin%descrr ) then
+	  bequal = .false.
+	  write(6,*) 'descrr: ',descrr,pbasin%descrr
+	end if
+
+	if( any(nen3v/=pbasin%nen3v) ) then
+	  bequal = .false.
+	  write(6,*) 'nen3v is differing'
+	end if
+	if( any(ipv/=pbasin%ipv) ) then
+	  bequal = .false.
+	  write(6,*) 'ipv is differing'
+	end if
+	if( any(ipev/=pbasin%ipev) ) then
+	  bequal = .false.
+	  write(6,*) 'ipev is differing'
+	end if
+	if( any(iarv/=pbasin%iarv) ) then
+	  bequal = .false.
+	  write(6,*) 'iarv is differing'
+	end if
+	if( any(xgv/=pbasin%xgv) ) then
+	  bequal = .false.
+	  write(6,*) 'xgv is differing'
+	end if
+	if( any(ygv/=pbasin%ygv) ) then
+	  bequal = .false.
+	  write(6,*) 'ygv is differing'
+	end if
+	if( any(hm3v/=pbasin%hm3v) ) then
+	  bequal = .false.
+	  write(6,*) 'hm3v is differing'
+	end if
+
+	if( bequal ) write(6,*) 'basins are identical'
+
+	return
+   99	continue
+	write(6,*) 'basins have different dimension:'
+	write(6,*) 'nkn: ',nkn,pbasin%nkn
+	write(6,*) 'nel: ',nel,pbasin%nel
+	write(6,*) 'ngr: ',ngr,pbasin%ngr
+	write(6,*) 'mbw: ',mbw,pbasin%mbw
+	stop 'error stop bascompare_bas: different dimensions'
 	end
 
 c*******************************************************************

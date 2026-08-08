@@ -74,6 +74,9 @@ bin/ts2nc
 src/tools/femutil/netcdf/ncinfo
 src/tools/femutil/netcdf/ncbgc
 src/tools/femutil/netcdf/ncelab
+src/tools/femutil/netcdf/ncugrid
+src/tools/femutil/netcdf/gr
+src/tools/femutil/netcdf/grnew
 src/tools/shyplot/shyplot
 bin/shyplot
 src/tools/shyelab/shyelab
@@ -84,8 +87,12 @@ src/tools/shyelab/extelab
 bin/extelab
 src/tools/shyelab/femelab
 bin/femelab
+src/tools/shyelab/list_strings
+bin/list_strings
 src/tools/shyelab/femcombine
 bin/femcombine
+src/tools/shyelab/femintp
+bin/femintp
 src/tools/shyelab/femadd
 bin/femadd
 src/tools/shyelab/femdate
@@ -112,8 +119,14 @@ src/tools/shyelab/dbg_box
 bin/dbg_box
 src/tools/femutil/optintp/optintp
 bin/optintp
+src/tools/femutil/spline/gridr
+bin/gridr
 src/shyfem/rstinf
 bin/rstinf
+src/shyfem/rst2shy
+bin/rst2shy
+src/shyfem/heat_test
+bin/heat_test
 
 src/tools/shypre/shypre_noopti
 bin/shypre_noopti
@@ -138,6 +151,9 @@ demopost
 
 src/utils/shympi/MPI_NODE
 src/utils/shympi/MPI_NONE
+
+bin/check/test_nc.f
+bin/check/test_x11.c
 
 #-----------------------------------------------
 
