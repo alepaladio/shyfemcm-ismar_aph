@@ -75,7 +75,7 @@ C_COMPILER = GNU_GCC
 #C_COMPILER = IBM
 #C_COMPILER = PGI
 
-INTEL_VERSION = IFORT
+#INTEL_VERSION = IFORT
 #INTEL_VERSION = IFX
 
 ##############################################
@@ -112,8 +112,8 @@ INTEL_VERSION = IFORT
 PARALLEL_OMP = false
 #PARALLEL_OMP = true
 
-PARALLEL_MPI = NONE
-#PARALLEL_MPI = NODE
+#PARALLEL_MPI = NONE
+PARALLEL_MPI = NODE
 #PARALLEL_MPI = ELEM
 
 ##############################################
@@ -141,10 +141,10 @@ PARALLEL_MPI = NONE
 #
 ##############################################
 
-PARTS = NONE
-#PARTS = METIS
+#PARTS = NONE
+PARTS = METIS
 #PARTS = PARMETIS
-METISDIR = 
+METISDIR = /home/utente/models/METIS-1-master/metis-5.1.0/build/Linux-x86_64
 METISDIR = ${METIS_HOME}
 #METISDIR = /usr/local
 #METISDIR = $(HOME)/lib/metis
@@ -263,11 +263,11 @@ GPU=NONE
 #
 ##############################################
 
-NETCDF = false
-#NETCDF = true
+#NETCDF = false
+NETCDF = true
 #NETCDFDIR =
-NETCDFDIR = ${NETCDF_C_HOME}
-NETCDFFDIR =${NETCDF_FORTRAN_HOME}
+NETCDFDIR = /usr
+NETCDFFDIR = /usr
 
 ##############################################
 # GOTM library
