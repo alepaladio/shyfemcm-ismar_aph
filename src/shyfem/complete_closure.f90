@@ -13,9 +13,9 @@
 ! above the crest remain open.  A layer intersected by the crest receives
 ! a proportional reduction.
 !
-! iff_ts_init is called with nintp=1, which SHYFEM defines as stepwise
-! interpolation. Therefore a gate changes state at the timestamp supplied
-! in the control file, without a linear transition between records.
+! iff_ts_init is called with nintp=2 so that SHYFEM retains the two time
+! records required by its time-series interpolation machinery. The returned
+! value is subsequently rounded and clipped to 0/1 by coclose_read_flag.
 !=======================================================================
 
 module coclose
@@ -24,7 +24,8 @@ module coclose
 
   type :: coclose_entry
     integer :: isc = 0
-    integer, allocatable :: kboc(:)       !nodes defining closure section
+    integer, allocatable :: kboc(:)       !external/global closure nodes
+    integer, allocatable :: kboc_local(:) !rank-local nodes; 0 if not present
     integer, allocatable :: ieboc(:)      !affected elements
     real :: height = 3.0                  !height above bed [m]
     real :: geyer = 1.0                   !0 closed, 1 open
@@ -105,8 +106,8 @@ contains
 
     use basin, only : nel
     use levels, only : ilhv, jlhv
-    !use mod_depth, only : hdeov
     use mod_layer_thickness, only : hdeov
+    use shympi
 
     integer, intent(in) :: id
 
@@ -220,17 +221,23 @@ subroutine rdcoclos(isc)
 end subroutine rdcoclos
 
 !=======================================================================
-! Validate input and convert external node numbers to internal numbers.
+! Validate input and create the rank-local node mapping.
+!
+! kboc is deliberately preserved in external/global numbering. In an MPI
+! run, ipint() returns 0 on ranks that do not contain a given global node;
+! this is normal and must not be treated as a global mesh error. The matching
+! local index is stored in kboc_local, or 0 when absent on the current rank.
 ! Call this after all STR sections have been read and before coclose_init.
 !=======================================================================
 
 subroutine ckcoclos
 
   use coclose
+  use shympi
 
   implicit none
 
-  integer :: id,i,knode,kint
+  integer :: id,i,knode,kint,nlocal
   integer :: ipint
   logical :: bstop
 
@@ -258,16 +265,31 @@ subroutine ckcoclos
       bstop = .true.
     end if
 
+    if (allocated(coclose_entries(id)%kboc_local)) then
+      deallocate(coclose_entries(id)%kboc_local)
+    end if
+    allocate(coclose_entries(id)%kboc_local( &
+             size(coclose_entries(id)%kboc)))
+    coclose_entries(id)%kboc_local = 0
+    nlocal = 0
+
     do i=1,size(coclose_entries(id)%kboc)
       knode = coclose_entries(id)%kboc(i)
-      kint = ipint(knode)
-      if (knode <= 0 .or. kint <= 0) then
-        write(6,*) 'cannot find coclose node: ',knode
+      if (knode <= 0) then
+        write(6,*) 'invalid coclose node number: ',knode
         bstop = .true.
       else
-        coclose_entries(id)%kboc(i) = kint
+        kint = ipint(knode)
+        if (kint > 0) then
+          coclose_entries(id)%kboc_local(i) = kint
+          nlocal = nlocal + 1
+        end if
       end if
     end do
+
+    write(6,*) 'coclose local node mapping: section=',id, &
+               ' local=',nlocal, &
+               ' global=',size(coclose_entries(id)%kboc)
   end do
 
   if (bstop) stop 'error stop: ckcoclos'
@@ -284,6 +306,7 @@ subroutine coclose_init
   use basin
   use levels, only : nlvdi
   use arrays
+  use shympi
 
   implicit none
 
@@ -316,9 +339,14 @@ subroutine coclose_init
 
   do id=1,ncoclose
     index = 0
-    do i=1,size(coclose_entries(id)%kboc)
-      k = coclose_entries(id)%kboc(i)
-      index(k) = 1
+    if (.not. allocated(coclose_entries(id)%kboc_local)) then
+      write(6,*) 'coclose local nodes not initialized: ',id
+      stop 'error stop: coclose_init'
+    end if
+
+    do i=1,size(coclose_entries(id)%kboc_local)
+      k = coclose_entries(id)%kboc_local(i)
+      if (k > 0 .and. k <= nkn) index(k) = 1
     end do
 
     call init_array(coclose_entries(id)%ieboc)
@@ -342,15 +370,16 @@ subroutine coclose_init
 
     call trim_array(coclose_entries(id)%ieboc,nieboc)
 
-    ! nintp=1: stepwise (no) interpolation; nvar=1: one gate flag.
-    !call iff_ts_init(dtime,trim(coclose_entries(id)%cfile),1,1,idfile)
+    ! nintp=2: two-record interpolation window; nvar=1: one gate flag.
+    ! coclose_read_flag rounds and clips the interpolated value to 0/1.
     call iff_ts_init(dtime,trim(coclose_entries(id)%cfile),2,1,idfile)
     coclose_entries(id)%idfile = idfile
     coclose_entries(id)%last_flag = 0
     coclose_entries(id)%geyer = 1.0
 
     write(6,*) 'complete closure initialized: ',id, &
-               ' nodes=',size(coclose_entries(id)%kboc), &
+               ' global nodes=',size(coclose_entries(id)%kboc), &
+               ' local nodes=',count(coclose_entries(id)%kboc_local > 0), &
                ' elements=',size(coclose_entries(id)%ieboc), &
                ' height=',coclose_entries(id)%height
   end do
@@ -367,6 +396,7 @@ end subroutine coclose_init
 subroutine coclose_handle(ic)
 
   use coclose
+  use shympi
 
   implicit none
 
@@ -407,6 +437,7 @@ end subroutine coclose_handle
 subroutine prcoclos
 
   use coclose
+  use shympi
 
   implicit none
 
@@ -426,3 +457,8 @@ subroutine prcoclos
   end do
 
 end subroutine prcoclos
+
+subroutine tscoclos
+  implicit none
+  call prcoclos
+end subroutine tscoclos

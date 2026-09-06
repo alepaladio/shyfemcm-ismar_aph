@@ -945,8 +945,3 @@
 	end
 
 !********************************************************************
-
-	subroutine tscoclos
-		implicit none
-		call prcoclos
-	end subroutine tscoclos
